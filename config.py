@@ -1,0 +1,291 @@
+"""
+Step-2 Filters module — paths and thresholds (single source of truth).
+
+Everything the screeners need is parameterized here. Conventions follow the
+sibling projects (lkm_rs, yf-gics, metaData_v1): scripts add this folder to
+sys.path and `import config`.
+
+Provenance of each threshold is cited inline (see IMPLEMENTATION_PLAN.md §0
+for the bibliography).
+"""
+from pathlib import Path
+
+SCREENERS_ROOT = Path(__file__).resolve().parent
+
+# --- downloadData_v1 is the data-owning sibling project; consumed in place ---
+DOWNLOAD_ROOT = Path('/home/imagda/_invest2024/python/downloadData_v1')
+
+UNIVERSE_CSV = DOWNLOAD_ROOT / 'user_input' / 'tradingview_universe.csv'
+MARKET_DATA_DAILY = DOWNLOAD_ROOT / 'data' / 'market_data' / 'daily'
+DAILY_ARCHIVE = MARKET_DATA_DAILY / 'archive'      # 2020-01-02 -> 2025-12-31
+DAILY_CURRENT = MARKET_DATA_DAILY / 'current'      # 2026-01-02 -> today
+MARKET_DATA_BATCH_DAILY = DOWNLOAD_ROOT / 'data' / 'market_data_batch' / 'daily'
+MARKET_DATA_SHARES = DOWNLOAD_ROOT / 'data' / 'market_data' / 'shares_outstanding'
+FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_0_8.csv'
+
+RESULTS_DIR = SCREENERS_ROOT / 'results'
+
+# --- history requirements (trading days) ---
+# SCTR needs 210 (test_scooter.sctr_model.MIN_DAILY_BARS); Minervini/stage need
+# 200-SMA + 20d slope buffer (lkm_rs STAGE_DAILY_MIN_BARS) and 252-bar 52w H/L.
+MIN_BARS_SCTR = 210
+MIN_BARS_TEMPLATE = 210
+BARS_52W = 252
+
+# --- 1st cat: Minervini trend template (lkm_rs config, daily variant) ---
+MINERVINI_SMA_SHORT = 50
+MINERVINI_SMA_MED = 150
+MINERVINI_SMA_LONG = 200
+MINERVINI_SLOPE_WINDOW = 20          # ~4 weeks
+MINERVINI_ABOVE_52W_LOW = 1.30       # price >= 30% above 52w low
+MINERVINI_FROM_52W_HIGH = 0.75       # price >= 75% of 52w high (within 25%)
+MINERVINI_MIN_RS = 70                # RS percentile >= 70 (criterion 8)
+MINERVINI_MIN_PASS = 8               # list membership: all criteria
+
+# --- IBD-style RS blend (lkm_rs config: authentic weighted multi-period) ---
+IBD_RS_LOOKBACKS = (63, 126, 189, 252)
+IBD_RS_WEIGHTS = (0.4, 0.2, 0.2, 0.2)
+
+# --- 1st cat: CANSLIM C-A-I (O'Neil; financial_data_0_8.csv snapshot) ---
+CANSLIM_C_MIN_YOY = 0.25             # C: latest quarterly EPS YoY >= +25%
+CANSLIM_C_MIN_BASE_EPS = 0.05        # C: year-ago qtr EPS >= $0.05 (excludes
+                                     #     near-zero-base YoY artifacts, e.g.
+                                     #     +2,000,000% from a $0.0001 base)
+CANSLIM_A_MIN_CAGR = 0.25            # A: annual EPS CAGR (3y) >= +25%
+CANSLIM_I_MIN_INST = 0.20            # I: heldPercentInstitutions >= 20%
+CANSLIM_MIN_SCORE = 3                # list membership: C and A and I
+
+# --- 1st cat: SCOOTER = SCTR (test_scooter/sctr_model.py, ChartSchool) ---
+SCOOTER_MIN_SCORE = 90.0             # StockCharts "leader" zone
+
+# --- 2nd cat: ATR extension (TradingView 60GMm8mE "ALEX", user MAs 21EMA/40SMA) ---
+ATR_PERIOD = 14
+EXT_EMA_PERIOD = 21                  # user: 21 EMA
+EXT_SMA_PERIOD = 40                  # user: 40 SMA (ALEX default is 50)
+EXT_THRESHOLD_1 = 2.0                # extended (ALEX "Threshold 1", yellow)
+EXT_THRESHOLD_2 = 5.0                # very extended (ALEX "Threshold 2", red)
+EXT_BELOW_THRESHOLD = -2.0           # extended below
+
+# --- 2nd cat: ADR / liquidity (ALEX adr_len=20; StockScreenHero "20d ADR %") ---
+ADR_PERIOD = 20
+ADV_PERIOD = 50                      # 50d avg dollar volume (StockScreenHero "IMPORTANT")
+MIN_ADV_DOLLAR = 1_000_000           # lkm_rs liquidity convention
+APPLY_LIQUIDITY_GATE = True          # applied to the focus list by default
+
+# --- 2nd cat: Weinstein stages (yf-gics/stage_analysis.py) ---
+STAGE_SMA_SHORT = 50
+STAGE_SMA_MED = 150
+STAGE_SMA_LONG = 200
+STAGE_SLOPE_WINDOW = 20
+STAGE_SLOPE_RISING = 0.05            # slope200% above this = rising
+STAGE_SLOPE_LATE = 0.15              # 2B vs 2C boundary
+
+# --- 2nd cat: RTI (TradingView yaIeno72; local rti_screener.py normalization) ---
+RTI_PERIODS = {'short': 5, 'swing': 15, 'long': 50}
+RTI_ZONE1 = 5.0                      # extremely tight (0-5)
+RTI_ZONE2 = 10.0                     # low volatility (5-10)
+RTI_ZONE3 = 15.0                     # moderate low (10-15)
+RTI_LOW_VOL = 20.0                   # dots threshold
+RTI_DOTS_CONSECUTIVE = 2             # >= 2 consecutive bars below threshold
+RTI_EXPANSION_MULT = 2.0             # volatility doubling
+
+# --- Leaders: Stockbee Movers (metaData_v1/src/screeners/stockbee/
+# stockbee_screener.py::_run_9m_movers/_run_weekly_movers/_run_daily_gainers;
+# more_screeners.md Task 1). Thresholds verbatim from the source. ---
+STOCKBEE_REL_VOL_WINDOW = 20         # relative-volume averaging window
+STOCKBEE_WEEK_WINDOW = 5             # "week" = last 5 trading days
+STOCKBEE_9M_MIN_VOLUME = 9_000_000   # 9M shares today
+STOCKBEE_9M_MIN_REL_VOL = 1.25       # today / 20d avg volume
+STOCKBEE_WEEKLY_MIN_GAIN_PCT = 20.0  # close(day5) vs open(day1)
+STOCKBEE_WEEKLY_MIN_REL_VOL = 1.25   # 5d avg vol / 20d avg vol
+STOCKBEE_WEEKLY_MIN_AVG_VOLUME = 100_000
+STOCKBEE_DAILY_MIN_GAIN_PCT = 4.0    # close vs previous close
+STOCKBEE_DAILY_MIN_REL_VOL = 1.5
+STOCKBEE_DAILY_MIN_VOLUME = 100_000
+
+# --- Leaders: Golden Launch Pad (TradingView DvE0wDfI — original now
+# removed from TradingView; authoritative port metaData_v1/src/screeners/
+# gold_launch_pad.py, params :43-60. more_screeners.md Task 2.) ---
+GLP_MA_PERIODS = (10, 20, 50)        # EMA periods (fastest -> slowest)
+GLP_ZSCORE_WINDOW = 50               # trailing window for MA z-scores
+GLP_MAX_SPREAD = 1.0                 # max (maxZ - minZ) across the 3 EMAs
+GLP_SLOPE_LOOKBACK_PCT = 0.3         # linreg lookback = 30% of MA period
+GLP_MIN_SLOPE = 0.0001               # per-bar slope, price units
+GLP_PROXIMITY_STDEV = 2.0            # |close - cluster avg| <= k * stdev
+GLP_PROXIMITY_WINDOW = 20            # rolling stdev window of close
+GLP_STRONG_SCORE = 0.7               # spread-score "Strong" threshold
+
+# --- Filter columns: volume + ADX (more_screeners.md Task 3; sources:
+# metaData_v1/src/screeners/volume_suite_components/volume_indicators.py
+# (VROC :29, ADTV :41, MFI :219) and metaData_v1/src/screeners/adx_report.py
+# -> src/indicators/indicators_calculation.py::calculate_adx (Joe Rabil
+# ADX(13,8), Wilder RMA). RVOL skipped: == Stockbee's rel_volume_today. ---
+VOLADX_VROC_PERIOD = 25
+VOLADX_ADTV_WINDOW = 50              # ADTV = avg daily volume in SHARES
+VOLADX_MFI_PERIOD = 14
+VOLADX_ATR_LEN = 13                  # Rabil ADX(13,8) setup
+VOLADX_DI_LEN = 13
+VOLADX_ADX_LEN = 8
+
+# --- Leaders: GMMA / Guppy Multiple Moving Average (more_screeners.md
+# Task 4; source metaData_v1/src/screeners/guppy_screener.py — alignment
+# :287-345, compression breakout :347-410, crossover :411+) ---
+GMMA_SHORT_PERIODS = (3, 5, 8, 10, 12, 15)
+GMMA_LONG_PERIODS = (30, 35, 40, 45, 50, 60)
+GMMA_COMPRESSION_RATIO = 0.02        # total group spread <= 2% = compressed
+GMMA_EXPANSION_MULT = 1.5            # breakout: current > 1.5x recent min
+GMMA_SPREAD_LOOKBACK = 10            # days of spread history
+GMMA_CROSSOVER_CONFIRM_DAYS = 3      # st/lt avg cross within last N days
+
+# --- Leaders: Qullamaggie Suite (more_screeners.md Task 5; source
+# metaData_v1/src/screeners/qullamaggie_suite.py — RS :226, MA stack :270,
+# ATR-RS :315, range position :349) ---
+QULLA_MIN_MARKET_CAP = 1_000_000_000     # $1B
+QULLA_RS_THRESHOLD = 97.0                # top 3% on >= 1 horizon
+QULLA_RS_HORIZONS = {'1w': 5, '1m': 20, '3m': 60, '6m': 120}
+QULLA_ATR_RS_THRESHOLD = 50.0            # ATR percentile vs $1B+ universe
+QULLA_RANGE_POSITION = 0.5               # upper half of 20d range
+QULLA_RANGE_WINDOW = 20
+QULLA_STACK_MAS = ('ema10', 'sma20', 'sma50', 'sma100', 'sma200')
+
+# --- Focus: volume anomaly detector (more_screeners.md Task 6; source
+# metaData_v1/src/screeners/volume_suite_components/
+# enhanced_volume_anomaly.py::_detect_statistical_anomalies :170-200,
+# cross-referenced with HVStdv.py::find_anomalies (std-deviation method)
+# and HVAbsoluteETC.py (absolute-spike filtering)) ---
+VOLANOM_LOOKBACK = 50               # rolling mean/std window
+VOLANOM_STD_THRESHOLD = 3.0         # sigma above rolling mean
+VOLANOM_MIN_VOLUME = 100_000        # shares today
+VOLANOM_MIN_RELATIVE = 1.5          # vol / rolling mean
+
+# --- Leaders: ADL 5-step accumulation suite (more_screeners.md Task 7;
+# source metaData_v1/src/screeners/ad_line/ package — adl_calculator,
+# adl_mom_analysis, adl_short_term, adl_ma_analysis, adl_composite_scoring;
+# all defaults verbatim from the modules' params) ---
+ADL_MOM_MIN_PCT = 15.0              # ideal monthly ADL growth range
+ADL_MOM_MAX_PCT = 30.0
+ADL_MOM_PERIOD = 22                 # bars per "month" (source default 22)
+ADL_MOM_LOOKBACK_MONTHS = 6         # only the last 6 monthly changes
+ADL_MOM_MIN_CONSISTENCY = 60.0
+ADL_MOM_CONSECUTIVE_MONTHS = 3
+ADL_SHORT_PERIODS = (5, 10, 20)     # short-term % changes
+ADL_SHORT_MOMENTUM_THRESHOLD = 5.0  # % for momentum/acceleration signal
+ADL_MA_PERIODS = (20, 50, 100)      # ADL SMA periods
+ADL_MA_MIN_SLOPE = 0.01
+ADL_W_LONGTERM = 0.4                # composite weights (sum to 1.0)
+ADL_W_SHORTTERM = 0.3
+ADL_W_MA = 0.3
+ADL_MIN_COMPOSITE = 70.0
+
+# --- dashboard context (StockScreenHero panel, dashboard_screener.png) ---
+DASHBOARD_MA_PERIODS = {'ema10': ('ema', 10), 'ema21': ('ema', 21),
+                        'sma50': ('sma', 50), 'sma200': ('sma', 200)}
+MOMENTUM_WINDOWS = {'gain_5d': 5, 'gain_1m': 21, 'gain_3m': 63, 'gain_6m': 126}
+
+# --- focus list default gates ---
+FOCUS_STAGES = ('2A', '2B')          # early/mid uptrend only
+FOCUS_MAX_EXT = EXT_THRESHOLD_2      # exclude very_extended names
+
+# --- output ---
+TOP_N_DASHBOARD = 30
+
+# --- Timing: Dr. Wish Blue/Black Dot (feedback_4.md Task 1; source
+# metaData_v1/src/screeners/drwish_screener.py — params :51-64, stochastic
+# :82-97, blue :314-360, black :361-418; daily timeframe multiplier = 1.0,
+# so these ARE the effective values) ---
+DRWISH_STOCH_PERIOD = 10            # stochastic %K lookback (both dots)
+DRWISH_BLUE_STOCH_THRESHOLD = 20.0  # %K crosses UP through this level
+DRWISH_BLUE_SMA_PERIOD = 50         # SMA must be rising (diff > 0)
+DRWISH_BLACK_STOCH_THRESHOLD = 25.0  # %K at/below this within lookback
+DRWISH_BLACK_LOOKBACK = 3           # bars to look for the oversold print
+DRWISH_BLACK_SMA_PERIOD = 30        # trend confirmation (close > SMA)
+DRWISH_BLACK_EMA_PERIOD = 21        # trend confirmation (close > EMA)
+
+# --- Timing: PVB price-volume breakout (feedback_4.md Task 2; source
+# metaData_v1/src/screeners/pvb_screener.py::_generate_pvb_TWmodel_signals;
+# parameter values from metaData_v1/user_data.csv runtime config) ---
+PVB_PRICE_BREAKOUT_PERIOD = 30      # rolling high/low window
+PVB_VOLUME_BREAKOUT_PERIOD = 30     # rolling volume-high window
+PVB_TRENDLINE_LENGTH = 50           # SMA trend filter
+PVB_CLOSE_THRESHOLD = 5             # consecutive closes vs SMA -> Close signal
+
+# --- Timing: ATR1 cloud / vol_stop (feedback_4.md Task 3; source
+# metaData_v1/src/screeners/atr1_screener.py:41-107 — "exact
+# implementation from atr_cloud.py validated against TradingView") ---
+ATR1_LENGTH = 20                    # primary vol-stop ATR length
+ATR1_FACTOR = 3.0                   # primary vol-stop ATR multiplier
+ATR1_LENGTH2 = 20                   # secondary vol-stop ATR length
+ATR1_FACTOR2 = 1.5                  # secondary vol-stop ATR multiplier
+
+# --- Patterns: GLB Green Line Breakout (feedback_4.md Task 5; source
+# metaData_v1/src/screeners/drwish_screener.py — params :42-48,
+# is_pivot_high :99-119, calculate_historical_glb_levels :149-238,
+# detect_glb_signals :240-313; daily timeframe, multiplier 1.0) ---
+GLB_PIVOT_STRENGTH = 10             # bars left/right for a pivot high
+GLB_LOOKBACK_BARS = 63              # '3m' — GLB = highest pivot in window
+GLB_HISTORICAL_BARS = 252           # '1y' — how far back to scan pivots
+GLB_CONFIRMATION_BARS = 10          # '2w' — unbroken confirmation window
+GLB_REQUIRE_CONFIRMATION = True
+GLB_MIN_DATA_POINTS = 100
+GLB_CACHE_DIR_NAME = 'glb_cache'    # under results/
+
+# --- Patterns: Cup & Handle (feedback_4.md Task 6; source patterns_v0/src/
+# cup_handle_detector.py + peak_trough_detector.py (kanwalpreet18 K-A-B-C-D
+# methodology, scipy.find_peaks). Three parameter presets — Strict is the
+# real O'Neil-style definition; Loose is patterns_v0's tuned daily config
+# (cup_handle_config.csv 'daily' rows, verbatim) which its own readme
+# documents as loosened to force hits (45.5% hit rate, avg quality 18.2).
+# Do NOT make Loose the unlabeled default (feedback_4.md Task 6 note). ---
+CUPHANDLE_PRESETS = {
+    'strict': {
+        # O'Neil-style textbook: cup 12-33% deep, 20-60 days, rims within
+        # 5%, handle in the UPPER THIRD of the cup and shallow (<= 30% of
+        # cup height), 5-30 days
+        'prominence_threshold': 0.05, 'distance_threshold': 5,
+        'cup_min_duration': 20, 'cup_max_duration': 60,
+        'cup_min_depth_pct': 0.12, 'cup_max_depth_pct': 0.33,
+        'cup_depth_tolerance': 0.05,
+        'handle_min_duration': 5, 'handle_max_duration': 30,
+        'handle_max_depth_pct': 0.30, 'handle_position_min': 2.0 / 3.0,
+        'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
+        'volume_ma_period': 20,
+    },
+    'default': {
+        # midway between textbook and the loosened source config
+        'prominence_threshold': 0.025, 'distance_threshold': 3,
+        'cup_min_duration': 10, 'cup_max_duration': 80,
+        'cup_min_depth_pct': 0.08, 'cup_max_depth_pct': 0.45,
+        'cup_depth_tolerance': 0.12,
+        'handle_min_duration': 3, 'handle_max_duration': 40,
+        'handle_max_depth_pct': 0.50, 'handle_position_min': 0.5,
+        'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
+        'volume_ma_period': 20,
+    },
+    'loose': {
+        # patterns_v0 cup_handle_config.csv 'daily' rows, verbatim —
+        # explicitly the permissive option, never the unlabeled default
+        'prominence_threshold': 0.005, 'distance_threshold': 1,
+        'cup_min_duration': 3, 'cup_max_duration': 120,
+        'cup_min_depth_pct': 0.01, 'cup_max_depth_pct': 0.80,
+        'cup_depth_tolerance': 0.25,
+        'handle_min_duration': 1, 'handle_max_duration': 30,
+        'handle_max_depth_pct': 1.00, 'handle_position_min': 0.0,
+        'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
+        'volume_ma_period': 20,
+    },
+}
+
+# --- Filters/screeners: more_screeners_3.md batch (feedback_7.md) ---
+RSI_PERIOD = 14                     # standard Wilder RSI period (provenance
+                                    # citation per convention; not a pass/
+                                    # fail threshold — RSI is a filter column)
+EMA20_SCTR_MIN = 75                 # 20-day EMA pullback: SCTR gate (source:
+                                    # EarningsBeats.com scan language via
+                                    # more_screeners_3.md)
+EMA20_SLOPE_LOOKBACK = 5            # EMA20 rising = today > EMA20 5 bars ago
+                                    # (chosen: 5 = one trading week — a
+                                    # deliberately lightweight point-to-point
+                                    # comparison, not an OLS slope like GLP's)
+DOWNTREND_REVERSAL_LOOKBACK_DAYS = 6  # strictly declining daily Highs before
+                                      # the reversal bar (EarningsBeats.com
+                                      # Pullback Scan via more_screeners_3.md)
