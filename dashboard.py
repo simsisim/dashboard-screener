@@ -38,7 +38,8 @@ def latest_run_dir() -> Path | None:
         return None
     date_dirs = [d for d in RESULTS.iterdir()
                  if d.is_dir() and re.fullmatch(r'\d{4}-\d{2}-\d{2}',
-                                                d.name)]
+                                                d.name)
+                 and (d / 'screener_results.csv').exists()]
     runs = sorted(date_dirs, reverse=True)
     return runs[0] if runs else None
 
@@ -678,10 +679,10 @@ def _timing_long_table(combined: dict, current_close: pd.Series) -> pd.DataFrame
                 rows.append({
                     'ticker': t, 'source': 'ATR1 Trend',
                     'signal_state': r['atr1_trend'],
-                    'days_since': None,
-                    'signal_price': None,
+                    'days_since': r.get('atr1_days_since_signal'),
+                    'signal_price': r.get('atr1_signal_price'),
                     'current_price': cur,
-                    'pct_chg_since_signal': None,
+                    'pct_chg_since_signal': r.get('atr1_performance_since_signal'),
                     'stop_level': r['atr1_stop_level'],
                     'as_of': r.get('as_of'),
                 })
@@ -884,12 +885,22 @@ with tab_patterns:
     pt1, pt2, _pt3 = st.columns([3, 2, 2])
     pt_indexes = pt1.multiselect('Scope: index membership', index_choices(),
                                  default=['S&P 500'], key='pt_index')
+    pt_whole_universe = pt1.checkbox(
+        'Or run against the WHOLE universe (ignore index selection above)',
+        key='pt_whole_universe',
+        help='Every ticker in tradingview_universe.csv, not just one '
+             'index — the same universe Leaders/Focus are built from.')
+    # resolve_scope/scope_key already treat an EMPTY index list as "match
+    # everything" — the checkbox just makes that reachable/discoverable
+    # instead of requiring the user to deselect every tag to get there.
+    pt_scope_indexes = [] if pt_whole_universe else pt_indexes
     pt_cap = pt2.select_slider('Min market cap',
                                options=[0, 300e6, 1e9, 2e9, 10e9],
                                value=0, key='pt_cap',
                                format_func=lambda v: f'${v:,.0f}')
-    if set(pt_indexes) & {'Russell 3000', 'NASDAQ Composite',
-                          'Mini-Russell 2000', 'STOXX Global 1800'}:
+    if pt_whole_universe or set(pt_indexes) & {
+            'Russell 3000', 'NASDAQ Composite',
+            'Mini-Russell 2000', 'STOXX Global 1800'}:
         st.warning('Wide scope — may take longer.')
 
     pt_pattern = st.radio('Pattern', ['Green Line Breakout (GLB)',
@@ -897,6 +908,7 @@ with tab_patterns:
                           key='pt_pattern', horizontal=True)
 
     pt_params = {}
+    pt_compare = False
     if pt_pattern.startswith('Green Line'):
         g1, g2, g3 = st.columns(3)
         pt_params['pivot_strength'] = g1.slider('Pivot strength', 3, 20,
@@ -904,22 +916,59 @@ with tab_patterns:
                                                 key='pt_glb_strength',
                                                 help='bars left/right of a '
                                                      'pivot high')
-        _lb_choice = g2.selectbox('Lookback period',
-                                  ['3m', '6m', '1y', '2y', 'complete'],
-                                  key='pt_glb_lookback')
-        _lb_bars = {'3m': 63, '6m': 126, '1y': 252, '2y': 504}.get(_lb_choice)
-        _conf = g3.selectbox('Confirmation period',
-                             ['1w', '2w', '1m', '3m'],
-                             key='pt_glb_conf')
-        # '3m' = 63 bars, same day-count convention as the Lookback
-        # dropdown's own '3m': 63 mapping (feedback_6.md)
-        pt_params['confirmation_bars'] = {'1w': 5, '2w': 10, '1m': 21,
-                                          '3m': 63}[_conf]
-        # the cache key hash covers the LOOKBACK CHOICE (widget state) —
-        # lookback_bars itself is only resolved after data load ('complete'
-        # needs the bar count); hashing the widget state means any visible
-        # parameter change produces a different key (feedback_5 class bug)
-        pt_params['lookback_choice'] = _lb_choice
+        pt_compare = st.checkbox(
+            'Compare multiple lookback/confirmation combos instead of one',
+            key='pt_glb_compare',
+            help='Pick which combos to run at once below — pivot '
+                 'detection and rolling windows are shared across combos '
+                 'that agree on a setting, so ticking more of them stays '
+                 'fast. Pivot strength above is shared by all of them.')
+        pt_selected_names = []
+        if pt_compare:
+            g2.selectbox('Lookback period', ['3m', '6m', '1y', '2y',
+                                             'complete'],
+                        key='pt_glb_lookback', disabled=True,
+                        help='ignored while comparing combos')
+            g3.selectbox('Confirmation period', ['1w', '2w', '1m', '3m'],
+                        key='pt_glb_conf', disabled=True,
+                        help='ignored while comparing combos')
+            hc1, hc2, hc3, hc4 = st.columns([1, 2, 1.3, 1.6])
+            hc1.markdown('**Run**')
+            hc2.markdown('**Combo**')
+            hc3.markdown('**Lookback**')
+            hc4.markdown('**Confirmation**')
+            for c in config.GLB_PRESET_CHOICES:
+                rc1, rc2, rc3, rc4 = st.columns([1, 2, 1.3, 1.6])
+                checked = rc1.checkbox(
+                    c['label'], key=f"pt_glb_combo_{c['name']}",
+                    value=c['name'] in config.GLB_PRESET_DEFAULT_SELECTED,
+                    label_visibility='collapsed')
+                rc2.write(c['label'])
+                rc3.write(f"{c['lookback_bars']} bars")
+                rc4.write(f"{c['confirmation_bars']} bars")
+                if checked:
+                    pt_selected_names.append(c['name'])
+            if not pt_selected_names:
+                st.warning('Pick at least one combo to run.')
+        else:
+            _lb_choice = g2.selectbox('Lookback period',
+                                      ['3m', '6m', '1y', '2y', 'complete'],
+                                      key='pt_glb_lookback')
+            _lb_bars = {'3m': 63, '6m': 126, '1y': 252,
+                       '2y': 504}.get(_lb_choice)
+            _conf = g3.selectbox('Confirmation period',
+                                 ['1w', '2w', '1m', '3m'],
+                                 key='pt_glb_conf')
+            # '3m' = 63 bars, same day-count convention as the Lookback
+            # dropdown's own '3m': 63 mapping (feedback_6.md)
+            pt_params['confirmation_bars'] = {'1w': 5, '2w': 10, '1m': 21,
+                                              '3m': 63}[_conf]
+            # the cache key hash covers the LOOKBACK CHOICE (widget state)
+            # — lookback_bars itself is only resolved after data load
+            # ('complete' needs the bar count); hashing the widget state
+            # means any visible parameter change produces a different key
+            # (feedback_5 class bug)
+            pt_params['lookback_choice'] = _lb_choice
     else:
         pt_preset = st.radio('Cup & Handle preset',
                              ['strict', 'default', 'loose'],
@@ -927,8 +976,15 @@ with tab_patterns:
                              help='Strict = O\'Neil-style textbook; Loose = '
                                   'patterns_v0 tuned config (permissive)')
 
-    pt_key = on_demand.scope_key(pt_indexes, pt_cap)
-    if pt_pattern.startswith('Green Line'):
+    pt_key = on_demand.scope_key(pt_scope_indexes, pt_cap)
+    if pt_pattern.startswith('Green Line') and pt_compare:
+        import hashlib
+        pt_ph = hashlib.md5(
+            str((pt_params['pivot_strength'],
+                sorted(pt_selected_names))).encode()) \
+            .hexdigest()[:8]
+        pt_file_key = f'glb_compare_{pt_key}_{pt_ph}'
+    elif pt_pattern.startswith('Green Line'):
         import hashlib
         pt_ph = hashlib.md5(str(sorted(pt_params.items())).encode()) \
             .hexdigest()[:8]
@@ -937,8 +993,11 @@ with tab_patterns:
         pt_file_key = f'cup_handle_{pt_key}_{pt_preset}'
     pt_run_dir = report.run_dir()
 
+    pt_combo_ok = not (pt_pattern.startswith('Green Line') and pt_compare
+                      and not pt_selected_names)
     pt_run = st.button('▶ Run', key='pt_run',
-                       disabled=not pt_indexes)
+                       disabled=not (pt_indexes or pt_whole_universe)
+                       or not pt_combo_ok)
 
     if pt_run:
         cached_pt_early = on_demand.load_cached(pt_run_dir, 'patterns',
@@ -950,7 +1009,7 @@ with tab_patterns:
                     "(recompute happens tomorrow, or via Download after a "
                     "forced re-run).")
         else:
-            tickers = on_demand.resolve_scope(pt_indexes, pt_cap,
+            tickers = on_demand.resolve_scope(pt_scope_indexes, pt_cap,
                                               full['market_cap'])
             if not tickers:
                 st.warning('Scope resolved to 0 tickers.')
@@ -964,7 +1023,19 @@ with tab_patterns:
                     bar.progress(done / total,
                                  text=f'Processing {done}/{total} tickers…')
 
-                if pt_pattern.startswith('Green Line'):
+                if pt_pattern.startswith('Green Line') and pt_compare:
+                    choices_by_name = {c['name']: c
+                                      for c in config.GLB_PRESET_CHOICES}
+                    scenarios = {
+                        name: {'lookback_bars':
+                              choices_by_name[name]['lookback_bars'],
+                              'confirmation_bars':
+                              choices_by_name[name]['confirmation_bars'],
+                              'pivot_strength': pt_params['pivot_strength']}
+                        for name in pt_selected_names
+                    }
+                    pt_df = glb.evaluate_multi(tickers, data_pt, scenarios)
+                elif pt_pattern.startswith('Green Line'):
                     _lbs = len(data_pt.get('close', pd.DataFrame()))
                     if _lb_choice == 'complete':
                         pt_params['lookback_bars'] = max(_lbs - 20, 100)
@@ -998,7 +1069,22 @@ with tab_patterns:
                        f"`{pt_file_key}` — press ▶ Run to recompute).")
         st.caption(f'{len(pt_results):,} tickers processed '
                    f'(scope key `{pt_active}`)')
-        if pt_pattern.startswith('Green Line'):
+        is_glb_compare = pt_pattern.startswith('Green Line') and any(
+            c.startswith('in_glb_breakout_') for c in pt_results.columns)
+        if is_glb_compare:
+            # combo selection is now user-driven (the table above), not a
+            # fixed config list — read back which ones this run actually
+            # has, in the table's display order
+            preset_names = [c['name'] for c in config.GLB_PRESET_CHOICES
+                            if f"in_glb_breakout_{c['name']}"
+                            in pt_results.columns]
+            view_cols_pt = ['as_of']
+            for name in preset_names:
+                view_cols_pt += [f'in_glb_breakout_{name}',
+                                 f'glb_level_{name}',
+                                 f'glb_detection_date_{name}',
+                                 f'glb_days_since_pivot_{name}']
+        elif pt_pattern.startswith('Green Line'):
             view_cols_pt = ['in_glb_breakout', 'glb_level',
                             'glb_detection_date', 'glb_days_since_pivot',
                             'as_of']
@@ -1007,11 +1093,18 @@ with tab_patterns:
                             if pt_preset in c or c == 'as_of']
         view_cols_pt = [c for c in view_cols_pt if c in pt_results.columns]
         show_pt = pt_results[view_cols_pt].copy()
-        if 'in_glb_breakout' in show_pt.columns:
+        if is_glb_compare:
+            breakout_cols = [c for c in show_pt.columns
+                             if c.startswith('in_glb_breakout_')]
+            if breakout_cols:
+                show_pt = show_pt[show_pt[breakout_cols].any(axis=1)]
+        elif 'in_glb_breakout' in show_pt.columns:
             show_pt = show_pt[show_pt['in_glb_breakout'] == True]  # noqa: E712
         elif 'in_cup_handle_' + pt_preset in show_pt.columns:
             show_pt = show_pt[
                 show_pt['in_cup_handle_' + pt_preset] == True]  # noqa: E712
+        st.caption(f'{len(show_pt):,} with a signal found '
+                  f'(out of {len(pt_results):,} processed)')
         if len(show_pt) <= 200:
             show_pt.insert(len(show_pt.columns), 'spark',
                            [_spark_closes_ts(t, run.name)

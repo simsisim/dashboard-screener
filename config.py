@@ -208,6 +208,7 @@ PVB_PRICE_BREAKOUT_PERIOD = 30      # rolling high/low window
 PVB_VOLUME_BREAKOUT_PERIOD = 30     # rolling volume-high window
 PVB_TRENDLINE_LENGTH = 50           # SMA trend filter
 PVB_CLOSE_THRESHOLD = 5             # consecutive closes vs SMA -> Close signal
+PVB_CACHE_DIR_NAME = 'pvb_cache'    # under results/ — incremental state-machine cache
 
 # --- Timing: ATR1 cloud / vol_stop (feedback_4.md Task 3; source
 # metaData_v1/src/screeners/atr1_screener.py:41-107 — "exact
@@ -216,6 +217,7 @@ ATR1_LENGTH = 20                    # primary vol-stop ATR length
 ATR1_FACTOR = 3.0                   # primary vol-stop ATR multiplier
 ATR1_LENGTH2 = 20                   # secondary vol-stop ATR length
 ATR1_FACTOR2 = 1.5                  # secondary vol-stop ATR multiplier
+ATR1_CACHE_DIR_NAME = 'atr1_cache'  # under results/ — incremental state-machine cache
 
 # --- Patterns: GLB Green Line Breakout (feedback_4.md Task 5; source
 # metaData_v1/src/screeners/drwish_screener.py — params :42-48,
@@ -228,6 +230,26 @@ GLB_CONFIRMATION_BARS = 10          # '2w' — unbroken confirmation window
 GLB_REQUIRE_CONFIRMATION = True
 GLB_MIN_DATA_POINTS = 100
 GLB_CACHE_DIR_NAME = 'glb_cache'    # under results/
+
+# Fixed 3-scenario comparison set for the dashboard's "compare presets" mode
+# (glb.evaluate_multi). pivot_strength is NOT included, it's shared from
+# whatever the dashboard's Pivot strength slider is set to. Order here is
+# the display order in the dashboard's combo-picker table. Bar counts use
+# the same 5-trading-days-per-week convention as the single-combo dropdowns
+# (1w=5, 2w=10, 1m=21, 3m=63, 6m=126, 1y=252, 2y=504).
+GLB_PRESET_CHOICES = [
+    {'name': '3m_2w', 'label': '3m / 2w',
+    'lookback_bars': 63, 'confirmation_bars': 10},
+    {'name': '3m_6w', 'label': '3m / 6w',
+    'lookback_bars': 63, 'confirmation_bars': 30},
+    {'name': '6m_1m', 'label': '6m / 1m',
+    'lookback_bars': 126, 'confirmation_bars': 21},
+    {'name': '1y_3m', 'label': '1y / 3m',
+    'lookback_bars': 252, 'confirmation_bars': 63},
+    {'name': '2y_3m', 'label': '2y / 3m',
+    'lookback_bars': 504, 'confirmation_bars': 63},
+]
+GLB_PRESET_DEFAULT_SELECTED = {'3m_2w', '6m_1m', '2y_3m'}
 
 # --- Patterns: Cup & Handle (feedback_4.md Task 6; source patterns_v0/src/
 # cup_handle_detector.py + peak_trough_detector.py (kanwalpreet18 K-A-B-C-D

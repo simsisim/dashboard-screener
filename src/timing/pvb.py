@@ -24,7 +24,19 @@ own last valid bar date — mixed-data transparency).
 
 On-demand module: `evaluate` takes an explicit ticker list (the scoped
 subset); NOT part of run_screeners.py's daily batch.
+
+INCREMENTAL CACHE: this is a true Markov state machine — bar i's state
+depends only on bar i-1's, nothing else — so (unlike GLB, which has to
+rescan a trailing window because pivot confirmation depends on future
+bars) resuming here is just "keep looping from the cached state." Keeps a
+per-ticker JSON cache under results/{PVB_CACHE_DIR_NAME}/{ticker}.json:
+the loop-carried state (signal, sig_date, consec) plus a bar-count/
+close-price fingerprint (through/through_close) that invalidates the
+cache on a split/history-rewrite, and a params_hash that invalidates it
+on a threshold change. Same shape as src/patterns/glb.py's cache, applied
+to a simpler (no rescan) problem.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -34,6 +46,34 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import config
 from src import indicators
+
+
+def _params_hash(params: dict) -> str:
+    return str(sorted((k, round(float(v), 6) if isinstance(v, (int, float))
+                       else str(v)) for k, v in params.items()))
+
+
+def _cache_path(ticker: str) -> Path:
+    d = config.RESULTS_DIR / config.PVB_CACHE_DIR_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f'{ticker.replace(".", "-")}.json'
+
+
+def _load_cache(ticker: str, params_hash: str) -> dict | None:
+    p = _cache_path(ticker)
+    if not p.exists():
+        return None
+    try:
+        c = json.loads(p.read_text())
+        if c.get('params_hash') != params_hash:
+            return None
+        return c
+    except Exception:
+        return None
+
+
+def _save_cache(ticker: str, params_hash: str, state: dict):
+    _cache_path(ticker).write_text(json.dumps(state))
 
 
 def evaluate(tickers: list, data: dict) -> pd.DataFrame:
@@ -53,6 +93,8 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
     vol_high = volume.rolling(vbp, min_periods=vbp).max()
     sma = indicators.sma(close, tll)
 
+    phash = _params_hash({'pbp': pbp, 'vbp': vbp, 'tll': tll, 'thr': thr})
+
     states = []
     for t in tickers:
         c = close[t].to_numpy(dtype=float)
@@ -66,7 +108,27 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
         signal = "No Signal"
         sig_i = None
         consec = 0
-        for i in range(1, len(c)):
+        start_i = 1
+
+        cache = _load_cache(t, phash)
+        if cache is not None and cache.get('through', -1) < len(c) - 1:
+            through = cache['through']
+            if through < len(c) and cache.get('through_close') == float(c[through]):
+                signal, consec = cache['signal'], cache['consec']
+                sig_date = cache.get('sig_date')
+                sig_i = idx.get_loc(sig_date) if sig_date is not None \
+                    and sig_date in idx else None
+                start_i = through + 1
+            # else: fingerprint mismatch (split/rewrite) — fall through cold
+        elif cache is not None and cache.get('through', -1) >= len(c) - 1:
+            # no new bars since last cache — reuse the cached end-state directly
+            signal, consec = cache['signal'], cache['consec']
+            sig_date = cache.get('sig_date')
+            sig_i = idx.get_loc(sig_date) if sig_date is not None \
+                and sig_date in idx else None
+            start_i = len(c)   # skip the loop entirely
+
+        for i in range(start_i, len(c)):
             if np.isnan(s[i]) or np.isnan(ph[i - 1]):
                 continue
             if (not np.isnan(ph[i - 1])
@@ -93,6 +155,14 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
                 if consec >= thr:
                     signal, sig_i, consec = "Close Sell", i, 0
 
+        _save_cache(t, phash, {
+            'params_hash': phash,
+            'through': len(c) - 1,
+            'through_close': float(c[-1]),
+            'signal': signal,
+            'consec': int(consec),
+            'sig_date': idx[sig_i].strftime('%Y-%m-%d') if sig_i is not None else None,
+        })
         states.append((t, signal, sig_i))
 
     rows = []

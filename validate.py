@@ -684,6 +684,25 @@ print(json.dumps(out))
         check('ATR1 cloud vs metaData_v1', not bad,
               '; '.join(bad[:2]) or '3 tickers exact')
 
+        # 11b. ATR1 days_since_signal/signal_type (this session's port of
+        # atr1_screener()'s "last crossover" scan, on top of the already-
+        # validated vol_stop_np — new logic, deserves its own check rather
+        # than riding on 11's pass)
+        bad2 = []
+        for t, vals in ref.items():
+            if mine.loc[t, 'atr1_signal_type'] != vals.get('signal_type'):
+                bad2.append(f"{t}.signal_type mine={mine.loc[t, 'atr1_signal_type']} "
+                            f"ref={vals.get('signal_type')}")
+            if mine.loc[t, 'atr1_signal_date'] != vals.get('signal_date'):
+                bad2.append(f"{t}.signal_date mine={mine.loc[t, 'atr1_signal_date']} "
+                            f"ref={vals.get('signal_date')}")
+            ref_days = vals.get('days_since_signal')
+            mine_days = mine.loc[t, 'atr1_days_since_signal']
+            if ref_days is not None and (pd.isna(mine_days) or int(mine_days) != int(ref_days)):
+                bad2.append(f"{t}.days_since mine={mine_days} ref={ref_days}")
+        check('ATR1 days_since_signal/signal_type vs metaData_v1', not bad2,
+              '; '.join(bad2[:2]) or '3 tickers exact')
+
     # 12. GLB (Task 5 patterns): records vs metaData_v1
     # (validate_glb_ref.py, isolated subprocess) + cache behavior
     out = subprocess.run([sys.executable, str(ROOT / 'validate_glb_ref.py')],
@@ -697,10 +716,20 @@ print(json.dumps(out))
         glb_data = data_loader.load_price_matrices(
             ['AAPL', 'MSFT'], use_batch=False, verbose=False)
         glb_mod.evaluate(['AAPL', 'MSFT'], glb_data)   # ensure caches warm
+        # cache is namespaced by params_hash (TODO_caching.md fix) —
+        # rebuild the same default params dict evaluate() used internally
+        # to find the right cache file.
+        default_params = {
+            'pivot_strength': config.GLB_PIVOT_STRENGTH,
+            'lookback_bars': config.GLB_LOOKBACK_BARS,
+            'historical_bars': config.GLB_HISTORICAL_BARS,
+            'confirmation_bars': config.GLB_CONFIRMATION_BARS,
+            'require_confirmation': config.GLB_REQUIRE_CONFIRMATION,
+        }
+        phash = glb_mod._params_hash(default_params)
         bad = []
         for t, ref_records in ref.items():
-            cpath = config.RESULTS_DIR / config.GLB_CACHE_DIR_NAME / \
-                f'{t}.json'
+            cpath = glb_mod._cache_path(t, phash)
             mine = json.loads(cpath.read_text())['records']
             mine_set = {(round(r['level'], 3), r['detection_date'],
                          r['is_confirmed'], r['is_broken'])
