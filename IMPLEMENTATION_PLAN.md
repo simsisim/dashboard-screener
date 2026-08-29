@@ -975,3 +975,26 @@ breakoutwatch's 4; `cef_sales_accel` proxy; whether to fold CANTATA into
 `combine.union` as a genuine 4th leaders list. The remaining `canslim.py`
 enrichment (its own module) is still separate — CEF here already covers ROE
 / sales / margins / forward-est / cash-flow that §16.11 listed for canslim.
+
+## 18. Patterns tab — annotated Cup & Handle chart (2026-08-29)
+
+The breakoutwatch "Anatomy of a Cup-with-Handle Pattern" chart for a
+detected ticker, inline in the dashboard. Single source of truth so the
+picture always matches the detector:
+- `src/patterns/cup_handle_chart.py::figure(ticker, preset, data) -> Figure`
+  re-runs cup_handle.py's own candidate selection (`_pick_candidate` calls
+  `_find_extrema` / `_all_pattern_points` / `_try_candidate`), then draws
+  the 4 stage bands, the labelled K-A-B-C-D points, Cup/Handle span arrows,
+  Today marker + stale-pivot note, the Setup-Gain / Cup-Depth / Handle-Depth
+  / Pivot-off / RCQ-HQ-CQ / Quality box, the measured-move target + stop
+  lines, and a volume panel with a 15-bar envelope. Returns None when the
+  detector resolves no pattern. Does NOT set the matplotlib backend.
+- `dashboard.py` Patterns tab (C&H only): a ticker selectbox under the
+  results table -> `st.pyplot(cup_handle_chart.figure(...))`, loading that
+  one ticker's OHLCV on demand.
+- `cup_handle_ideas/cupAndHandle/draw_cup_handle.py` is now a thin CLI
+  wrapper over the same `figure()` (was a 200-line duplicate).
+
+Verification: test_dashboard_app.py **31/31** — new `C&H annotated chart
+renders` check (selectbox present with options; `figure()` returns a
+Figure). validate.py 37/37 unchanged.

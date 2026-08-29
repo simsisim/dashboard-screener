@@ -270,6 +270,23 @@ def main():
             b.click().run()
     check('patterns tab: C&H run completes', len(at4.exception) == 0,
           at4.exception[0].message[:120] if at4.exception else '')
+    # annotated-chart section: the ticker selectbox renders and the figure
+    # builder returns a Figure for a detected pattern (no exception on the
+    # st.pyplot path — covered by the 0-exception check above)
+    _chart_sel = [s for s in at4.selectbox if s.key == 'pt_chart_ticker']
+    _chart_ok = bool(_chart_sel) and len(_chart_sel[0].options) > 0
+    if _chart_ok:
+        import matplotlib
+        matplotlib.use('Agg')
+        from src.patterns import cup_handle_chart as _chmod
+        from src import data_loader as _dl
+        _cd = _dl.load_price_matrices([_chart_sel[0].options[0]],
+                                      use_batch=True, verbose=False)
+        _fig = _chmod.figure(_chart_sel[0].options[0], 'loose', _cd)
+        _chart_ok = _fig is not None and hasattr(_fig, 'savefig')
+    check('patterns tab: C&H annotated chart renders', _chart_ok,
+          f'selectbox={bool(_chart_sel)} '
+          f'opts={len(_chart_sel[0].options) if _chart_sel else 0}')
     # feedback_5 DoD: pt_preset must be part of the C&H file key —
     # verified empirically (strict vs loose -> distinct persisted files)
     loose_f = _latest_run_dir() / 'patterns_cup_handle_nasdaq100_cap0_loose.csv'
