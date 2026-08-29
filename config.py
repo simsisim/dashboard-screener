@@ -55,6 +55,27 @@ CANSLIM_A_MIN_CAGR = 0.25            # A: annual EPS CAGR (3y) >= +25%
 CANSLIM_I_MIN_INST = 0.20            # I: heldPercentInstitutions >= 20%
 CANSLIM_MIN_SCORE = 3                # list membership: C and A and I
 
+# --- CANTATA / CE (breakoutwatch CANTATA Evaluator; lit/CE Overview.html;
+# research/breakoutwatch_ce_mapping.md). CET technical (0-7, items 2-5 are
+# interpolated 0..1 between breakoutwatch's "worst" and "best"), CEF
+# fundamental (0-11, 1 pt each), CE = CET + CEF (0-18). Stock-level, NOT
+# pattern-anchored — surfaced as a preset + score columns, like CANSLIM. ---
+CANTATA_UD_WINDOW = 50               # CET5 Up/Down volume ratio lookback
+CANTATA_UD_BEST = 2.0               # CET5 best value (>= 2.0 -> 1.0)
+CANTATA_UD_WORST = 0.7             # CET5 worst value (< 0.7 -> 0.0)
+CANTATA_RS_BEST = 99.0             # CET2 RS rank best
+CANTATA_RS_WORST = 1.0            # CET2 RS rank worst
+CANTATA_52WHIGH_BEST = -15.0      # CET4 pct_from_52w_high best (within 15%)
+CANTATA_52WHIGH_WORST = -60.0    # CET4 worst (>60% off)
+CANTATA_CEF_QOQ_MIN = 0.18       # CEF1 quarterly EPS YoY, 2 Q's
+CANTATA_CEF_YOY_MIN = 0.25       # CEF4 annual EPS YoY, 3 FY's (y4 sparse)
+CANTATA_CEF_SALES_MIN = 0.25     # CEF5 quarterly sales YoY
+CANTATA_CEF_FWD_MIN = 0.15       # CEF7 forward EPS growth vs trailing
+CANTATA_CEF_ROE_MIN = 0.17       # CEF9 return on equity
+CANTATA_CEF_CFLO_MIN = 1.20      # CEF10 cash flow / earnings ratio
+CANTATA_CEF_INST_MIN_HOLDERS = 5  # CEF8 institutional holder count
+CANTATA_MIN_CE = 12.0            # in_cantata membership: CE >= this (of 18)
+
 # --- 1st cat: SCOOTER = SCTR (test_scooter/sctr_model.py, ChartSchool) ---
 SCOOTER_MIN_SCORE = 90.0             # StockCharts "leader" zone
 
@@ -257,7 +278,38 @@ GLB_PRESET_DEFAULT_SELECTED = {'3m_2w', '6m_1m', '2y_3m'}
 # real O'Neil-style definition; Loose is patterns_v0's tuned daily config
 # (cup_handle_config.csv 'daily' rows, verbatim) which its own readme
 # documents as loosened to force hits (45.5% hit rate, avg quality 18.2).
-# Do NOT make Loose the unlabeled default (feedback_4.md Task 6 note). ---
+# Do NOT make Loose the unlabeled default (feedback_4.md Task 6 note).
+#
+# §16 breakoutwatch.com alignment (IMPLEMENTATION_PLAN §16; digest in
+# cup_handle_ideas/cupAndHandle/lit/breakoutwatch_methodology.md) added
+# these keys on top of the kanwalpreet18 geometry — Loose keeps every one
+# NON-BINDING so it stays byte-identical to patterns_v0's daily config:
+#   setup_gain_min       Task A — prior uptrend into the left rim (O'Neil
+#                        "prior advance >= 30%"; breakoutwatch "Setup Gain
+#                        >= 30%"). Prior low = min over CUPHANDLE_SETUP_LOOKBACK
+#                        bars before the left rim.
+#   pivot_max_age        Task B — max bars from the right rim (= handle
+#                        start = breakoutwatch "pivot") to the last bar
+#                        (breakoutwatch: pivot within 90 days).
+#   cup_handle_ratio_min Task C — cup length / handle length (breakoutwatch: >= 3).
+#   handle_midpoint_rule Task D — require (rim_c + handle_low) / 2 >=
+#                        (rim_a + base_low) / 2 (breakoutwatch handle rule).
+#   use_intraday_extremes Task H — measure rims off the daily HIGH and
+#                        bottoms off the daily LOW (breakoutwatch uses the
+#                        intraday extreme of each bar; NOT sub-daily data,
+#                        which we don't have and don't need). Falls back to
+#                        close when high/low matrices aren't supplied.
+#   candidate_selection  'recent' scans ALL constructible K-A-B-C-D and
+#                        returns the freshest valid one (so the Task B
+#                        recency cap surfaces a current cup, not the
+#                        earliest one in a multi-year history); 'first' =
+#                        the source's earliest-trough pick, kept for Loose.
+# Tasks E/F (HQ/RCQ volume-quality sub-scores) and G (volume-confirmed
+# breakout flag) need no config — they use the existing volume_ma_period /
+# breakout_volume_factor and always emit their columns. ---
+CUPHANDLE_SETUP_LOOKBACK = 252   # §16 Task A: bars before the left rim to
+                                 # scan for the prior low (1y cap so an
+                                 # ancient low on a long uptrend isn't used)
 CUPHANDLE_PRESETS = {
     'strict': {
         # O'Neil-style textbook: cup 12-33% deep, 20-60 days, rims within
@@ -271,6 +323,10 @@ CUPHANDLE_PRESETS = {
         'handle_max_depth_pct': 0.30, 'handle_position_min': 2.0 / 3.0,
         'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
         'volume_ma_period': 20,
+        # §16 additions (O'Neil-faithful values)
+        'setup_gain_min': 0.30, 'pivot_max_age': 90,
+        'cup_handle_ratio_min': 3.0, 'handle_midpoint_rule': True,
+        'use_intraday_extremes': True, 'candidate_selection': 'recent',
     },
     'default': {
         # midway between textbook and the loosened source config
@@ -282,6 +338,10 @@ CUPHANDLE_PRESETS = {
         'handle_max_depth_pct': 0.50, 'handle_position_min': 0.5,
         'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
         'volume_ma_period': 20,
+        # §16 additions (midway)
+        'setup_gain_min': 0.20, 'pivot_max_age': 150,
+        'cup_handle_ratio_min': 2.0, 'handle_midpoint_rule': True,
+        'use_intraday_extremes': True, 'candidate_selection': 'recent',
     },
     'loose': {
         # patterns_v0 cup_handle_config.csv 'daily' rows, verbatim —
@@ -294,6 +354,11 @@ CUPHANDLE_PRESETS = {
         'handle_max_depth_pct': 1.00, 'handle_position_min': 0.0,
         'volume_decline_threshold': 0.8, 'breakout_volume_factor': 1.5,
         'volume_ma_period': 20,
+        # §16 additions — ALL non-binding: Loose == patterns_v0 daily config
+        # (incl. candidate_selection 'first' = source's earliest-trough pick)
+        'setup_gain_min': 0.0, 'pivot_max_age': 10 ** 9,
+        'cup_handle_ratio_min': 0.0, 'handle_midpoint_rule': False,
+        'use_intraday_extremes': False, 'candidate_selection': 'first',
     },
 }
 

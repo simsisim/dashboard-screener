@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 import config  # noqa: E402  (module-root paths)
 from src import data_loader, on_demand, report  # noqa: E402
 from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
-from src.patterns import cup_handle, glb  # noqa: E402
+from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 
 st.set_page_config(page_title='Step-2 Filters — Leaders & Focus',
                    layout='wide')
@@ -358,7 +358,8 @@ with tab_all:
     with st.expander('Advanced filters (stage, RS, RTI, leaders lists, '
                      'exchange, index…)'):
         a1, a2, a3, a4 = st.columns(4)
-        a1.multiselect('Leaders lists', ['minervini', 'canslim', 'scooter'],
+        a1.multiselect('Leaders lists',
+                       ['minervini', 'canslim', 'scooter', 'cantata'],
                        key='adv_leaders')
         a2.radio('Combine lists', ['Any (union)', 'All (intersection)'],
                  key='adv_leaders_mode', disabled=not st.session_state['adv_leaders'])
@@ -395,6 +396,11 @@ with tab_all:
         a21.checkbox('52w low breakdown', key='adv_52w_low_breakdown')
         a22.checkbox('EMA20 pullback test', key='adv_ema20_pullback')
         a23.checkbox('Downtrend reversal', key='adv_downtrend_reversal')
+        a24, a25, _a26, _a27 = st.columns(4)
+        a24.checkbox('CANTATA CE leader', key='adv_cantata',
+                     help=f'in_cantata: CE >= {config.CANTATA_MIN_CE} of 18')
+        a25.slider('CANTATA CE ≥', 0.0, 18.0, key='adv_ce_min', step=0.5,
+                   help='0 = off; CET(0-7) + CEF(0-11)')
         st.markdown('**Volume & trend filters**')
         v1, v2, v3, v4 = st.columns(4)
         with v1:
@@ -448,9 +454,12 @@ with tab_all:
                   'adv_gold_launch_pad', 'adv_qullamaggie',
                   'adv_volume_anomaly', 'adv_adl_accumulation',
                   'adv_52w_high_breakout', 'adv_52w_low_breakdown',
-                  'adv_ema20_pullback', 'adv_downtrend_reversal'):
+                  'adv_ema20_pullback', 'adv_downtrend_reversal',
+                  'adv_cantata'):
         if st.session_state.get(_flag):
             mask &= full[f'in_{_flag[4:]}'].fillna(False).astype(bool)
+    if st.session_state.get('adv_ce_min', 0.0) > 0 and 'ce_score' in full.columns:
+        mask &= full['ce_score'].fillna(0) >= st.session_state['adv_ce_min']
     if st.session_state.get('adv_gmma_state'):
         mask &= full['gmma_state'].isin(st.session_state['adv_gmma_state'])
     if st.session_state['adv_exchange']:
@@ -1124,6 +1133,28 @@ with tab_patterns:
             dfil.save_list(ln.strip(), show_pt.index)
             st.success(f'saved {len(show_pt)} tickers to '
                        f'my_lists/{ln.strip()}.csv')
+
+        # ---- annotated cup & handle chart for a selected ticker ----
+        if not pt_pattern.startswith('Green Line') and len(show_pt):
+            st.markdown('---')
+            chart_t = st.selectbox(
+                'Annotated chart (K-A-B-C-D, stages, target/stop, RCQ/HQ/CQ)',
+                list(show_pt.index), key='pt_chart_ticker')
+            if chart_t:
+                try:
+                    _cd = data_loader.load_price_matrices(
+                        [chart_t], use_batch=True, verbose=False)
+                    _fig = cup_handle_chart.figure(chart_t, pt_preset, _cd)
+                    if _fig is None:
+                        st.info(f'{chart_t}: the detector no longer resolves '
+                                'a pattern for this preset (data changed since '
+                                'the run).')
+                    else:
+                        st.pyplot(_fig)
+                        import matplotlib.pyplot as _plt
+                        _plt.close(_fig)
+                except Exception as _e:                    # noqa: BLE001
+                    st.warning(f'chart failed for {chart_t}: {_e}')
     elif pt_results is not None:
         st.info('Run completed: 0 patterns detected in this scope with '
                 'the current parameters.')

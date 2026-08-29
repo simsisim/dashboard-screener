@@ -171,3 +171,15 @@ def pct_from_52w_low(close: pd.DataFrame, low52: pd.DataFrame) -> pd.DataFrame:
 def momentum(close: pd.DataFrame) -> dict:
     """Price % gains over the dashboard windows (5d/1m/3m/6m)."""
     return {name: roc(close, n) for name, n in config.MOMENTUM_WINDOWS.items()}
+
+
+def up_down_volume_ratio(close: pd.DataFrame, volume: pd.DataFrame,
+                         window: int = 50) -> pd.DataFrame:
+    """O'Neil Up/Down volume ratio = Σ(volume on up-close days) /
+    Σ(volume on down-close days) over the trailing `window` bars. Used by
+    the CANTATA CET score (breakoutwatch CE item 5; best >= 2.0, worst <
+    0.7 — lit/CE Overview.html). > 1 = accumulation, < 1 = distribution."""
+    chg = close.diff()
+    up = volume.where(chg > 0, 0.0).rolling(window, min_periods=window).sum()
+    dn = volume.where(chg < 0, 0.0).rolling(window, min_periods=window).sum()
+    return up / dn.replace(0.0, np.nan)

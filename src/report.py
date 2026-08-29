@@ -51,7 +51,8 @@ def write_dashboard(md_path: Path, universe_meta: dict, results: dict):
     ap("")
     for name, label in [('minervini', 'Minervini trend template (8/8)'),
                         ('canslim', 'CANSLIM C-A-I (C and A and I)'),
-                        ('scooter', 'SCOOTER / SCTR >= 90')]:
+                        ('scooter', 'SCOOTER / SCTR >= 90'),
+                        ('cantata', f'CANTATA CE >= {config.CANTATA_MIN_CE} (of 18)')]:
         df = results.get(f'leaders_{name}')
         n = 0 if df is None else len(df)
         ap(f"- **{label}**: {n} tickers")

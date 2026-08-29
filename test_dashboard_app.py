@@ -93,15 +93,18 @@ def main():
             m &= res['rti_zone'].isin(adv['adv_rti_zone'])
         for _flag in ('adv_9m_movers', 'adv_weekly_movers', 'adv_daily_gainers',
                       'adv_gold_launch_pad', 'adv_qullamaggie',
-                      'adv_volume_anomaly', 'adv_adl_accumulation'):
+                      'adv_volume_anomaly', 'adv_adl_accumulation',
+                      'adv_cantata'):
             if adv.get(_flag):
                 m &= res['in_' + _flag[4:]].fillna(False).astype(bool)
+        if adv.get('adv_ce_min', 0.0) > 0:
+            m &= res['ce_score'].fillna(0) >= adv['adv_ce_min']
         return int(m.sum())
 
     preset_box = [s for s in at.selectbox if s.label == "Ioa's Presets"][0]
     for pname in ['Minervini 8/8 (liquid)', 'SCOOTER >= 90',
-                  'CANSLIM C-A-I leaders', 'Stockbee 9M Movers',
-                  'ADL Accumulation']:
+                  'CANSLIM C-A-I leaders', 'CANTATA CE leaders',
+                  'Stockbee 9M Movers', 'ADL Accumulation']:
         preset_box.set_value(pname).run()
         got, want = caption_count(at), expected_count(pname)
         check(f'preset count: {pname}', got == want, f'ui={got} data={want}')
@@ -267,6 +270,23 @@ def main():
             b.click().run()
     check('patterns tab: C&H run completes', len(at4.exception) == 0,
           at4.exception[0].message[:120] if at4.exception else '')
+    # annotated-chart section: the ticker selectbox renders and the figure
+    # builder returns a Figure for a detected pattern (no exception on the
+    # st.pyplot path — covered by the 0-exception check above)
+    _chart_sel = [s for s in at4.selectbox if s.key == 'pt_chart_ticker']
+    _chart_ok = bool(_chart_sel) and len(_chart_sel[0].options) > 0
+    if _chart_ok:
+        import matplotlib
+        matplotlib.use('Agg')
+        from src.patterns import cup_handle_chart as _chmod
+        from src import data_loader as _dl
+        _cd = _dl.load_price_matrices([_chart_sel[0].options[0]],
+                                      use_batch=True, verbose=False)
+        _fig = _chmod.figure(_chart_sel[0].options[0], 'loose', _cd)
+        _chart_ok = _fig is not None and hasattr(_fig, 'savefig')
+    check('patterns tab: C&H annotated chart renders', _chart_ok,
+          f'selectbox={bool(_chart_sel)} '
+          f'opts={len(_chart_sel[0].options) if _chart_sel else 0}')
     # feedback_5 DoD: pt_preset must be part of the C&H file key —
     # verified empirically (strict vs loose -> distinct persisted files)
     loose_f = _latest_run_dir() / 'patterns_cup_handle_nasdaq100_cap0_loose.csv'

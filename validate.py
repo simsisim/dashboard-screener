@@ -183,11 +183,14 @@ def main():
         # column; adv_ prefix strips to the column name
         for _flag in ('adv_9m_movers', 'adv_weekly_movers', 'adv_daily_gainers',
                       'adv_gold_launch_pad', 'adv_qullamaggie',
-                      'adv_volume_anomaly', 'adv_adl_accumulation'):
+                      'adv_volume_anomaly', 'adv_adl_accumulation',
+                      'adv_cantata'):
             if adv.get(_flag):
                 col = 'in_' + _flag[4:]   # adv_x flag -> in_x column
                 if col in r.columns:
                     mask &= r[col].fillna(False).astype(bool)
+        if adv.get('adv_ce_min', 0.0) > 0 and 'ce_score' in r.columns:
+            mask &= r['ce_score'].fillna(0) >= adv['adv_ce_min']
         if adv.get('adv_gmma_state'):
             mask &= r['gmma_state'].isin(adv['adv_gmma_state'])
         return mask
@@ -233,6 +236,8 @@ def main():
             lambda r: r['in_canslim'].fillna(False),
         'SCOOTER >= 90':
             lambda r: r['in_scooter'].fillna(False),
+        'CANTATA CE leaders':
+            lambda r: r['in_cantata'].fillna(False),
         'Tight consolidation (RTI)':
             lambda r: r['rti_zone'].isin(['1', '2']) & (r['adv50_dollar'] >= 1e6),
         'Leaders not extended (<= 2 ATR)':
@@ -280,6 +285,39 @@ def main():
         counts.append(f'{pname.split(" (")[0]}={int(m_preset.sum())}')
     check(f'ALL {len(dfil.PRESETS)} presets == manual filters', not bad,
           '; '.join(bad[:3]) or ' | '.join(counts))
+
+    # 5b. CANTATA / CE — score bounds + composition + two CEF items
+    # reconstructed straight from the financial snapshot
+    cta_bad = []
+    if 'ce_score' not in res.columns:
+        cta_bad.append('ce_score column missing from screener_results')
+    else:
+        cet, cef, ce = res['cet_score'], res['cef_score'], res['ce_score']
+        if not (cet.dropna().between(0, 7).all()
+                and cef.dropna().between(0, 11).all()
+                and ce.dropna().between(0, 18).all()):
+            cta_bad.append(f'out of range: cet[{cet.min()},{cet.max()}] '
+                           f'cef[{cef.min()},{cef.max()}] ce[{ce.min()},{ce.max()}]')
+        if not np.allclose((cet + cef).fillna(-1), ce.fillna(-1), atol=1e-6):
+            cta_bad.append('ce_score != cet_score + cef_score')
+        fin = pd.read_csv(config.FIN_DATA_CSV, low_memory=False).set_index('ticker')
+        fin = fin.reindex(res.index)
+        pos_eps = ((pd.to_numeric(fin['q1_eps'], errors='coerce') > 0)
+                   & (pd.to_numeric(fin['q2_eps'], errors='coerce') > 0)).fillna(False)
+        roe = pd.to_numeric(fin['returnOnEquity'], errors='coerce').fillna(
+            pd.to_numeric(fin['y1_roe'], errors='coerce'))
+        roe_ok = (roe >= config.CANTATA_CEF_ROE_MIN).fillna(False)
+        if 'cef_pos_eps' in res.columns and not bool(
+                (res['cef_pos_eps'].fillna(False) == pos_eps).all()):
+            cta_bad.append('cef_pos_eps != (q1_eps>0 & q2_eps>0)')
+        if 'cef_roe' in res.columns and not bool(
+                (res['cef_roe'].fillna(False) == roe_ok).all()):
+            cta_bad.append('cef_roe != (ROE >= 0.17)')
+    check('CANTATA CE: bounds + CET+CEF composition + CEF items vs snapshot',
+          not cta_bad, '; '.join(cta_bad[:3]) or
+          (f"in_cantata={int(res['in_cantata'].sum())} "
+           f"median CE={res['ce_score'].median():.1f}"
+           if 'ce_score' in res.columns else ''))
 
     # 6. save->load round trip preserves a custom-range selection
     # (feedback_2.md: the 'Custom…' string was saved, bounds dropped)
@@ -750,7 +788,10 @@ print(json.dumps(out))
     # (validate_ch_ref.py --synthetic, isolated subprocess)
     _n_ch = 170
     _idx_ch = pd.date_range('2025-01-01', periods=_n_ch, freq='B')
-    _ch_segs = [np.linspace(80, 100, 56),
+    # seg0 rises 72 -> 100: >= 30% prior advance into the left rim, so the
+    # §16 Task A setup-gain gate (strict 30%) is satisfied on this fixture
+    # (kept identical to validate_ch_ref.build_synthetic).
+    _ch_segs = [np.linspace(72, 100, 56),
                 np.concatenate([np.linspace(100, 92.5, 7),
                                 np.linspace(92.5, 103, 13)]),
                 np.linspace(103, 82.4, 31),
@@ -776,6 +817,60 @@ print(json.dumps(out))
     check('C&H synthetic: all presets detect the constructed pattern',
           not ch_bad, '; '.join(ch_bad[:2]) or
           f"strict quality={_ch_out['cup_handle_quality_score_strict']}")
+
+    # §16 breakoutwatch alignment — the added gates: each must (a) report its
+    # column on the good fixture and (b) reject when its own threshold is
+    # made impossible, while Loose (all gates non-binding) still fires.
+    _ch_bad2 = []
+    _sg = _ch_out['cup_handle_setup_gain_pct_strict']
+    if not (pd.notna(_sg) and _sg >= 30.0):
+        _ch_bad2.append(f'strict setup_gain={_sg} (<30)')
+    _rt = _ch_out['cup_handle_ratio_strict']
+    if not (pd.notna(_rt) and _rt >= 3.0):
+        _ch_bad2.append(f'strict cup:handle ratio={_rt} (<3)')
+    _dr = _ch_out['cup_handle_days_since_rim_strict']
+    if not (pd.notna(_dr) and _dr <= 90):
+        _ch_bad2.append(f'strict days_since_rim={_dr} (>90)')
+    if not _ch_out['in_cup_handle_loose']:
+        _ch_bad2.append('loose did not fire (gates should be non-binding)')
+    # CQ (report-only) must be present and a finite blend of rcq/hq
+    for _p in ('strict', 'loose'):
+        _cq = _ch_out[f'cup_handle_cq_{_p}']
+        _rc = _ch_out[f'cup_handle_rcq_{_p}']
+        _hqv = _ch_out[f'cup_handle_hq_{_p}']
+        if not (pd.notna(_cq) and min(_rc, _hqv) - 1e-6 <= _cq
+                <= max(_rc, _hqv) + 1e-6):
+            _ch_bad2.append(f'{_p} cq={_cq} not within [rcq,hq]=[{_rc},{_hqv}]')
+    _ch_np = _ch_close.astype(float)
+    _ch_vol = (np.arange(1, _n_ch + 1) * 1e6).astype(float)
+    for _gate, _override in (
+            ('setup_gain_min', {'setup_gain_min': 0.99}),
+            ('pivot_max_age', {'pivot_max_age': 1}),
+            ('cup_handle_ratio_min', {'cup_handle_ratio_min': 99.0})):
+        _pp = dict(config.CUPHANDLE_PRESETS['strict'])
+        _pp.update(_override)
+        _rr = ch_mod._evaluate_preset(_ch_np, None, None, _ch_vol, _pp)
+        if _rr['found']:
+            _ch_bad2.append(f'{_gate}: gate did not reject')
+    # midpoint rule (Task D) — attributed: a deep-low-handle variant that a
+    # permissive preset finds; turning ONLY handle_midpoint_rule on rejects it
+    _ch_lh = _ch_np.copy()
+    _ch_lh[134:142] -= 14.0                      # push the handle well below mid-base
+    _pp_lo = dict(config.CUPHANDLE_PRESETS['loose'])
+    _pp_lo.update({'cup_min_duration': 20, 'handle_max_depth_pct': 1.0,
+                   'handle_position_min': 0.0, 'handle_midpoint_rule': False})
+    _pp_hi = dict(_pp_lo, handle_midpoint_rule=True)
+    _found_lo = ch_mod._evaluate_preset(_ch_lh, None, None, _ch_vol, _pp_lo)['found']
+    _found_hi = ch_mod._evaluate_preset(_ch_lh, None, None, _ch_vol, _pp_hi)['found']
+    if not (_found_lo and not _found_hi):
+        _ch_bad2.append(f'midpoint rule: off={_found_lo} on={_found_hi} '
+                        '(expected True/False)')
+    check('C&H §16 gates: reported on fixture + each rejects at its limit',
+          not _ch_bad2, '; '.join(_ch_bad2[:3]) or
+          f"setup_gain={round(_sg, 1)}% ratio={_rt} "
+          f"hq={_ch_out['cup_handle_hq_strict']} "
+          f"rcq={_ch_out['cup_handle_rcq_strict']} "
+          f"cq={_ch_out['cup_handle_cq_strict']}")
 
     # cross-check vs patterns_v0's own detector on the same synthetic data
     out = subprocess.run([sys.executable, str(ROOT / 'validate_ch_ref.py'),

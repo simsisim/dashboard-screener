@@ -744,3 +744,257 @@ the lookback_bars bug in feedback_5).
 - DoD verified: 1m vs 3m runs produce DISTINCT cache files
   (beb243f6 vs c05b03b2 — a 21-for-63 config typo would fail this)
 - Suites: validate.py 28/28, test_dashboard_app.py 29/29
+
+## 16. Cup & Handle fidelity — breakoutwatch.com alignment (2026-08-29)
+
+**Status: Tasks A–H DONE (2026-08-29, unsupervised — user review pending).
+Task I deferred (needs outcome data).**
+
+Context: reconstructed breakoutwatch.com's C&H + CANSLIM methodology from
+Wayback captures (`cup_handle_ideas/cupAndHandle/lit/`; digest in
+`lit/breakoutwatch_methodology.md`; full gap analysis in
+`dashboard-screener/research/breakoutwatch_alignment.md`).
+
+`src/patterns/cup_handle.py` (§13.9 Task 6) is a generic K-A-B-C-D geometric
+detector (find_peaks on close). breakoutwatch's *published spec* (not code —
+we don't have their source) is more complete and outcome-validated (2017
+discriminant model on real alert outcomes since 2014). Their geometric gate is
+actually LOOSER than our `strict` preset — the value is in specific ADDITIVE
+pieces below. The detector core (K-A-B-C-D geometry + measured-move
+`target = resistance + cup_height`) stays; these tasks enrich it.
+
+Ordering = highest false-positive reduction first. Each task: config keys per
+preset (strict/default/loose), a `validate.py` behavioral check on a synthetic
+fixture, new output columns wired into the Patterns tab.
+
+### 16.1 Task A — Setup-gain / prior-uptrend gate  [priority 1]
+Require the rise from a pre-cup low to the left rim `close[a]` >= threshold
+(breakoutwatch: >= 30%; O'Neil: "prior uptrend >= 30%"). Today `k` is only
+"the peak before `a`" with no magnitude test — the single biggest
+false-positive source. Between `k` and `a` find the min low; gate on
+`(close[a] - low) / low`. New key `CUPHANDLE_PRESETS[*]['setup_gain_min']`
+(strict 0.30, default 0.20, loose 0.0). validate: synthetic fixture with a
+sub-threshold run-up rejected by strict, accepted by loose.
+
+### 16.2 Task B — Absolute pivot recency cap  [priority 2]
+Emit `days_since_right_rim` (= `n - 1 - c` bars) and gate on `pivot_max_age`
+(breakoutwatch: pivot within 90 days, cup <= 325 days). Surfaces actionable
+setups vs stale ones. Currently only relative `cup_max_duration` exists.
+
+### 16.3 Task C — Explicit cup:handle length ratio  [priority 3]
+Gate `(c - a) / max(d - c, 1) >= ratio` (breakoutwatch: >= 3; also implies
+handle <= 1/3 cup). Currently only implicit via `handle_max_duration`.
+Key `cup_handle_ratio_min` (strict 3.0, default 2.0, loose 0.0).
+
+### 16.4 Task D — Handle-midpoint >= base-midpoint rule
+Named alternative to `handle_position_min`:
+`(close[c] + close[d]) / 2 >= (close[a] + close[b]) / 2`. NOTE: our `strict`
+preset (`handle_position_min = 2/3`) is already STRICTER than breakoutwatch's
+actual rule — this is a looser, spec-faithful option, not a tightening.
+Key `handle_midpoint_rule` (bool per preset).
+
+### 16.5 Task E — HQ-style handle volume scoring  -> quality score
+Iterate handle days `c..d`, score each on the price/volume quadrant
+(price-down + volume-down = "very desirable" = max; price-up + volume-up =
+"unfavorable" = min), weight recent days heavier, normalize. Bonus: latest
+close up & vol >= avg -> +1; & vol >= prior day -> +0.5. New `handle_quality`
+sub-score feeding a revised `quality`. Source: `lit/Chart Quality.html` (HQ
+2x2 matrix).
+
+### 16.6 Task F — RCQ-style right-side volume scoring  -> quality score
+Score each day `b..c` on up-move-on-above-average-volume (demand), recent
+days weighted heavier, normalize -> `right_cup_quality` sub-score.
+Source: `lit/Chart Quality.html` (RCQ).
+
+### 16.7 Task G — Volume-confirmed breakout flag
+breakoutwatch alert = price >= pivot AND volume >= 1.25-1.5x ADV. Today
+`stage == 'breakout'` fires on `close > resistance` alone. Add
+`breakout_volume_confirmed` bool (latest volume >= `breakout_volume_factor` x
+vol MA — the constant already exists in every preset, just unused for stage
+gating).
+
+### 16.8 Task H — intraday high/low extrema  [optional, larger]
+Use the high series for `a`,`c` and the low series for `b`,`d` instead of
+close (O'Neil purists + breakoutwatch use intraday). Larger change —
+`evaluate` currently pulls only `data['close']` / `data['volume']`. Document
+as a known deviation if deferred.
+
+### 16.9 Task I — outcome-trained ranker  [future, needs outcome data]
+If pattern outcomes ever get logged: LDA/logistic on {momentum slope,
+momentum, prev-day price+volume rise, volume %-of-50d-avg, earnings
+acceleration}. breakoutwatch's ranked factors — momentum slope #1, RS rank
+weakest (they dropped their RS >= 92 requirement over it). Would replace the
+current hand-weighted `quality` formula. Out of scope until a feedback loop
+exists; noted so the hand-weights aren't mistaken for validated.
+
+### 16.10 Not in scope
+Trading rules (entry / trailing-stop / position sizing) — breakoutwatch has
+detailed ones (3-10% trailing stops, 2 positions @ 50%), but entries/exits
+are out of scope per intro.md. `target` / `stop` outputs stay as reference
+levels only.
+
+### 16.11 Companion: canslim.py additions + a CE/CANTATA preset (separate)
+Not C&H. Full CET+CEF item -> project-column mapping, the 4 real gaps
+(industry rank, U/D volume ratio, plus the CEF fundamentals), and a
+copy-paste sketch for both a cheap partial `ce_partial` (0-8, from columns
+that already exist) and the full 0-18 `ce_score`:
+**`research/breakoutwatch_ce_mapping.md`**. CE is stock-level and
+pattern-independent — it becomes a preset ("CANTATA CE >= N"), not a change
+to the pattern detector. `canslim.py` additions (ROE >= 17%, sales growth
+>= 25% + accel, forward est, net-margin = 3-FY max, cash flow) feed CEF.
+Keep our YoY "C" (more faithful than their CEF1). Strengthen "I" only if
+13F / quarterly holder counts become available. **NOT STARTED.**
+
+### 16.12 Results (2026-08-29, Tasks A–H — unsupervised, review pending)
+
+Implemented in `src/patterns/cup_handle.py` + `config.py` CUPHANDLE_PRESETS.
+The kanwalpreet18 geometric core is untouched; every §16 gate is
+**non-binding for Loose** (`setup_gain_min` 0, `pivot_max_age` 1e9,
+`cup_handle_ratio_min` 0, `handle_midpoint_rule` off, `use_intraday_extremes`
+off, `candidate_selection` 'first') — so Loose stays byte-identical to
+patterns_v0's daily config.
+
+- **A setup-gain gate** — `config.CUPHANDLE_SETUP_LOOKBACK` (252) bars before
+  the left rim scanned for the prior low; `(rim - prior_low)/prior_low >=
+  setup_gain_min` (strict 0.30, default 0.20). Reported as
+  `cup_handle_setup_gain_pct_{preset}` even when non-gating.
+- **B pivot-recency cap** — `cup_handle_days_since_rim_{preset}` = bars from
+  the right rim; gate `> pivot_max_age` (strict 90, default 150). REQUIRED a
+  companion change: `_all_pattern_points` now returns EVERY constructible
+  K-A-B-C-D and Strict/Default use `candidate_selection='recent'` (freshest
+  right rim first, take the first that passes) — otherwise the cap just
+  nulled out the earliest-candidate pick on multi-year histories. Loose
+  keeps `'first'` (validate only the earliest constructible candidate,
+  exactly like patterns_v0).
+- **C cup:handle ratio** — `cup_handle_ratio_{preset}` = `(c-a)/max(d-c,1)`;
+  gate `< cup_handle_ratio_min` (strict 3.0, default 2.0).
+- **D handle-midpoint rule** — `handle_midpoint_rule` (strict/default on):
+  reject if `(rim_c + handle_low)/2 < (rim_a + base_low)/2`.
+- **E HQ / F RCQ / CQ** — `cup_handle_hq_{preset}` / `cup_handle_rcq_{preset}`,
+  recency-weighted price/volume quality (breakoutwatch Handle Quality 2x2 and
+  Right Cup Quality); folded into the quality score as `+max(0,rcq)*10` and
+  `+max(0,hq)*10` (HQ carries the breakout-foreshadow bonus). Plus
+  `cup_handle_cq_{preset}` = breakoutwatch **Chart Quality** = RCQ+HQ blended,
+  weight shifting toward HQ as the handle lengthens (`w_hq = 0.40 + 0.30 *
+  min(handle_dur/20, 1)`). CQ is **report-only** — not a gate, not in the
+  quality score. RCQ/HQ/CQ are pattern-window metrics (B→C, C→D), so they
+  mean nothing without a detected pattern; the stock-level CANTATA (CE/CET/
+  CEF) scores are a separate non-pattern concern —
+  `research/breakoutwatch_ce_mapping.md`.
+- **G volume-confirmed breakout** — `cup_handle_breakout_vol_confirmed_{preset}`
+  bool: stage=='breakout' AND latest volume >= `breakout_volume_factor` x
+  vol MA.
+- **H intraday extremes** — `use_intraday_extremes` (strict/default on):
+  rims off the daily HIGH, bottoms off the daily LOW when `data['high']` /
+  `data['low']` are supplied (dashboard path); falls back to close when not
+  (validate's close-only synthetic). NOTE: "intraday" = the daily bar's
+  high/low (the intraday extreme of that session), NOT sub-daily bars —
+  which we don't have and this doesn't need.
+
+New per-preset columns: `cup_handle_setup_gain_pct`, `cup_handle_days_since_rim`,
+`cup_handle_ratio`, `cup_handle_hq`, `cup_handle_rcq`, `cup_handle_cq`,
+`cup_handle_breakout_vol_confirmed`. Dashboard picks them up automatically
+(`view_cols_pt` = any column containing the preset name).
+
+**Verification:**
+- validate.py **36/36** — the synthetic fixture's seg0 steepened 80->72
+  (>=30% prior advance, so strict's Task A gate passes; kept identical in
+  `validate.py` and `validate_ch_ref.build_synthetic`). New check
+  `C&H §16 gates`: each gate reports on the good fixture and rejects when its
+  own threshold is made impossible (setup 0.99 / age 1 / ratio 99 /
+  midpoint-on with a deep-low-handle variant). `C&H vs patterns_v0
+  (synthetic)` still exact (Loose depth 20.15, unchanged).
+- test_dashboard_app.py **29/29** — Patterns tab C&H run + per-preset cache
+  keys intact.
+- Real data, unchanged Loose (candidate_selection='first' + non-binding
+  gates): NASDAQ 100 loose 43->43, S&P 500 loose 226->226 (byte-identical
+  counts). Strict: NDX 0, SPX 1 (textbook-rare, as expected). Default (the
+  useful working list): NDX 6, SPX 37 — recent cups, days-since-rim 4–18 on
+  the freshest.
+
+**Open for review:** threshold calibration (setup_gain 30/20, pivot_max_age
+90/150, ratio 3/2); whether `default` should also gate on
+`breakout_vol_confirmed`; the HQ/RCQ weight (`*10` each) in the quality
+score. Task I (outcome-trained ranker) still needs a logged-outcomes feed.
+
+## 17. CANTATA / CE — stock-level leader score (2026-08-29)
+
+**Status: DONE (2026-08-29, unsupervised — user review pending).** Was §16.11.
+
+breakoutwatch's CANTATA Evaluator (`lit/CE Overview.html`) as a 4th
+leaders-slot score, alongside CANSLIM / Minervini / SCOOTER. Full item ->
+column mapping + the deviations forced by the yfinance snapshot:
+`research/breakoutwatch_ce_mapping.md`. **CE is stock-level, NOT
+pattern-anchored** — the opposite of §16's CQ (which stays in the C&H
+module). Pattern recognition is untouched by this.
+
+**CE = CET (technical, 0-7) + CEF (fundamental, 0-11) = 0-18.**
+
+- `src/leaders/cantata.py` — `evaluate(context, ud_ratio)`:
+  - **CET** from the price context already in `screener_results`:
+    `cet_ma` (0-3: price>50dMA + price>200dMA + 50dMA>200dMA, the last as
+    `pct_vs_50sma < pct_vs_200sma`); `cet_rs`, `cet_industry` (RS percentile
+    within `industry`, ≥3 members else 0.5), `cet_52whigh`, `cet_updown` —
+    each a 0..1 linear interp between breakoutwatch's stated worst/best
+    (`config.CANTATA_*`).
+  - **CEF** reads `financial_data_0_8.csv` directly (like canslim.py) —
+    11 pass/fail: `cef_qoq_eps` (2Q YoY ≥18% via qh1/qh2_eps_growth_yoy),
+    `cef_pos_eps`, `cef_eps_accel` (qh1>qh2>qh3>qh4 growth), `cef_yoy_eps`
+    (y1..y3 each ≥25%), `cef_qoq_sales` (q1 vs q5 rev ≥25%), `cef_sales_accel`
+    (sequential QoQ rev rising — documented proxy; snapshot lacks the history),
+    `cef_fwd_eps` (forwardEps/trailingEps-1 ≥15%), `cef_institutional`
+    (holders ≥5 AND avg_pct_change ≥0), `cef_roe` (≥17%), `cef_cashflow`
+    (y1_cashflow_vs_eps_ratio ≥1.2), `cef_margin` (y1 net margin = 3-FY max).
+- `src/indicators.py::up_down_volume_ratio` — 50d Σ(up-vol)/Σ(down-vol),
+  CET item 5.
+- Wiring: `run_screeners.py` computes it in the leaders block, joins
+  ~20 columns into `screener_results.csv`, writes `leaders_cantata.csv`,
+  adds a dashboard.md line. `in_cantata = ce_score >= config.CANTATA_MIN_CE`
+  (12/18).
+- **NOT added to the 3-way `combine.union`** — deliberate: the union's
+  `n_sources` / focus-list base pool / dashboard leak-tests are all keyed to
+  the canonical 3 (Minervini/CANSLIM/SCOOTER). CANTATA is a score column +
+  its own list + a preset; folding it into the union is a separate change.
+- Dashboard: `'cantata'` added to the Advanced "Leaders lists" multiselect;
+  new `adv_cantata` checkbox + `adv_ce_min` slider (0-18); preset
+  **"CANTATA CE leaders"** in Ioa's Presets (mirrors `in_cantata`).
+
+**Verification:**
+- Full run: **122 / 3961** pass CE ≥ 12 (~3%, a sane leader bar); median CE
+  6.0, range [0.01, 15.29]; cet ∈ [0.01, 7.0], cef ∈ [0, 10].
+- validate.py **37/37** — new `CANTATA CE: bounds + CET+CEF composition +
+  CEF items vs snapshot` (ce == cet+cef, all in range, `cef_pos_eps` /
+  `cef_roe` reconstructed from the CSV); "ALL 15 presets == manual filters"
+  now includes CANTATA CE leaders (=122).
+- test_dashboard_app.py **30/30** — preset-count loop includes
+  "CANTATA CE leaders" (ui=122=data).
+
+**Open for review:** `CANTATA_MIN_CE` 12/18; whether CET items should be
+graded (current) or pass/fail; `cef_yoy_eps` at 3 FY (data limit) vs
+breakoutwatch's 4; `cef_sales_accel` proxy; whether to fold CANTATA into
+`combine.union` as a genuine 4th leaders list. The remaining `canslim.py`
+enrichment (its own module) is still separate — CEF here already covers ROE
+/ sales / margins / forward-est / cash-flow that §16.11 listed for canslim.
+
+## 18. Patterns tab — annotated Cup & Handle chart (2026-08-29)
+
+The breakoutwatch "Anatomy of a Cup-with-Handle Pattern" chart for a
+detected ticker, inline in the dashboard. Single source of truth so the
+picture always matches the detector:
+- `src/patterns/cup_handle_chart.py::figure(ticker, preset, data) -> Figure`
+  re-runs cup_handle.py's own candidate selection (`_pick_candidate` calls
+  `_find_extrema` / `_all_pattern_points` / `_try_candidate`), then draws
+  the 4 stage bands, the labelled K-A-B-C-D points, Cup/Handle span arrows,
+  Today marker + stale-pivot note, the Setup-Gain / Cup-Depth / Handle-Depth
+  / Pivot-off / RCQ-HQ-CQ / Quality box, the measured-move target + stop
+  lines, and a volume panel with a 15-bar envelope. Returns None when the
+  detector resolves no pattern. Does NOT set the matplotlib backend.
+- `dashboard.py` Patterns tab (C&H only): a ticker selectbox under the
+  results table -> `st.pyplot(cup_handle_chart.figure(...))`, loading that
+  one ticker's OHLCV on demand.
+- `cup_handle_ideas/cupAndHandle/draw_cup_handle.py` is now a thin CLI
+  wrapper over the same `figure()` (was a 200-line duplicate).
+
+Verification: test_dashboard_app.py **31/31** — new `C&H annotated chart
+renders` check (selectbox present with options; `figure()` returns a
+Figure). validate.py 37/37 unchanged.

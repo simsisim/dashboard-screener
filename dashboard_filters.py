@@ -192,6 +192,15 @@ PRESETS = {
         'advanced': {'adv_leaders': ['scooter'],
                      'adv_leaders_mode': 'Any (union)'},
     },
+    # breakoutwatch CANTATA Evaluator — CET (0-7) + CEF (0-11) = CE (0-18);
+    # a stock-quality composite in the same slot as CANSLIM / Minervini
+    # (research/breakoutwatch_ce_mapping.md). Preset mirrors the leaders
+    # list (in_cantata == CE >= config.CANTATA_MIN_CE).
+    'CANTATA CE leaders': {
+        'selections': {},
+        'advanced': {'adv_leaders': ['cantata'],
+                     'adv_leaders_mode': 'Any (union)'},
+    },
     'Tight consolidation (RTI)': {
         'selections': {'adv': '> $1M'},
         'advanced': {'adv_rti_zone': ['1', '2']},
@@ -290,6 +299,8 @@ ADVANCED_DEFAULTS = {
     'adv_52w_low_breakdown': False,
     'adv_ema20_pullback': False,
     'adv_downtrend_reversal': False,
+    'adv_cantata': False,
+    'adv_ce_min': 0.0,
 }
 
 
