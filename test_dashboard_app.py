@@ -93,15 +93,18 @@ def main():
             m &= res['rti_zone'].isin(adv['adv_rti_zone'])
         for _flag in ('adv_9m_movers', 'adv_weekly_movers', 'adv_daily_gainers',
                       'adv_gold_launch_pad', 'adv_qullamaggie',
-                      'adv_volume_anomaly', 'adv_adl_accumulation'):
+                      'adv_volume_anomaly', 'adv_adl_accumulation',
+                      'adv_cantata'):
             if adv.get(_flag):
                 m &= res['in_' + _flag[4:]].fillna(False).astype(bool)
+        if adv.get('adv_ce_min', 0.0) > 0:
+            m &= res['ce_score'].fillna(0) >= adv['adv_ce_min']
         return int(m.sum())
 
     preset_box = [s for s in at.selectbox if s.label == "Ioa's Presets"][0]
     for pname in ['Minervini 8/8 (liquid)', 'SCOOTER >= 90',
-                  'CANSLIM C-A-I leaders', 'Stockbee 9M Movers',
-                  'ADL Accumulation']:
+                  'CANSLIM C-A-I leaders', 'CANTATA CE leaders',
+                  'Stockbee 9M Movers', 'ADL Accumulation']:
         preset_box.set_value(pname).run()
         got, want = caption_count(at), expected_count(pname)
         check(f'preset count: {pname}', got == want, f'ui={got} data={want}')

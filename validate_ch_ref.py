@@ -22,7 +22,9 @@ def build_synthetic():
     import numpy as np
     n = 170
     idx = pd.date_range('2025-01-01', periods=n, freq='B')
-    segs = [np.linspace(80, 100, 56),
+    # seg0 rises 72 -> 100: a >= 30% prior advance into the left rim, so the
+    # §16 Task A setup-gain gate (strict 30%) is satisfied on this fixture.
+    segs = [np.linspace(72, 100, 56),
             np.concatenate([np.linspace(100, 92.5, 7),
                             np.linspace(92.5, 103, 13)]),
             np.linspace(103, 82.4, 31),

@@ -29,9 +29,9 @@ import config
 from src import combine, data_loader, indicators, report
 from src.focus import atr_extension, rti, stages, volume_adx, \
     volume_anomaly
-from src.leaders import adl_accumulation, canslim, downtrend_reversal, \
-    ema20_pullback, gmma, gold_launch_pad, minervini, qullamaggie, \
-    scooter, stockbee_movers
+from src.leaders import adl_accumulation, canslim, cantata, \
+    downtrend_reversal, ema20_pullback, gmma, gold_launch_pad, minervini, \
+    qullamaggie, scooter, stockbee_movers
 
 
 def parse_args(argv=None):
@@ -89,6 +89,8 @@ def main(argv=None):
 
     rs_raw = indicators.ibd_rs_raw(close)
     rs_pct = indicators.cross_sectional_percentile(rs_raw).iloc[-1]
+    ud_ratio = indicators.up_down_volume_ratio(
+        close, data['volume'], config.CANTATA_UD_WINDOW).iloc[-1]
 
     ctx = pd.DataFrame(index=close.columns)
     ctx.index.name = 'ticker'
@@ -134,6 +136,11 @@ def main(argv=None):
         can_df = can_df[can_df.index.isin(close.columns)]   # loaded universe only
         print(f'  -> {int(can_df["in_canslim"].sum())} C&A&I')
 
+        print('leader filter d) CANTATA / CE (CET 0-7 + CEF 0-11)...')
+        cta_df = cantata.evaluate(ctx, ud_ratio)
+        print(f'  -> {int(cta_df["in_cantata"].sum())} CE >= {config.CANTATA_MIN_CE}'
+              f' (of 18) | median CE {cta_df["ce_score"].median():.1f}')
+
         lists = {'minervini': minervini.leaders(min_df),
                  'canslim': canslim.leaders(can_df),
                  'scooter': scooter.leaders(sco_df)}
@@ -152,6 +159,7 @@ def main(argv=None):
         results.update({'leaders_minervini': lists['minervini'],
                         'leaders_canslim': lists['canslim'],
                         'leaders_scooter': lists['scooter'],
+                        'leaders_cantata': cantata.leaders(cta_df),
                         'leaders_union': union_df})
 
     full = None
@@ -210,11 +218,12 @@ def main(argv=None):
             full = full.join(min_df[['minervini_count']], how='left')
             full = full.join(sco_df[['scooter_score']], how='left')
             full = full.join(can_df[['C_pass', 'A_pass', 'I_pass', 'canslim_score']], how='left')
+            full = full.join(cta_df, how='left')          # CANTATA CET/CEF/CE
             full = full.join(union_df[['in_minervini', 'in_canslim', 'in_scooter',
                                        'sources', 'n_sources',
                                        'I_accumulation', 'I_shares_data']], how='left')
             for col in ('in_minervini', 'in_canslim', 'in_scooter',
-                        'I_accumulation', 'I_shares_data'):
+                        'in_cantata', 'I_accumulation', 'I_shares_data'):
                 full[col] = full[col].astype('boolean').fillna(False).astype(bool)
 
         # ---------- focus list: gates ----------
@@ -242,6 +251,7 @@ def main(argv=None):
         lists['minervini'].to_csv(out / 'leaders_minervini.csv')
         lists['canslim'].to_csv(out / 'leaders_canslim.csv')
         lists['scooter'].to_csv(out / 'leaders_scooter.csv')
+        cantata.leaders(cta_df).to_csv(out / 'leaders_cantata.csv')
         union_df.to_csv(out / 'leaders_all.csv')
 
     uni_meta = {'n_universe': len(tickers), 'n_loaded': len(data['meta']),
