@@ -26,17 +26,21 @@ ROOT = Path(__file__).resolve().parent
 
 
 def _latest_run_dir():
-    """Newest results/YYYY-MM-DD directory (ignore non-date entries like
-    glb_cache/ or my_lists/)."""
+    """Newest results/YYYY-MM-DD *batch* dir — same guard as the dashboard's
+    own latest_run_dir(): must hold screener_results.csv. (The on-demand tabs
+    call report.run_dir() on every boot, which mkdirs an empty today/ dir
+    when no batch ran today; without the guard this helper would pick it.)
+    On-demand cache-file assertions use report.run_dir() instead."""
     date_dirs = [d for d in (ROOT / 'results').iterdir()
-                 if d.is_dir() and re.fullmatch(r'\d{4}-\d{2}-\d{2}', d.name)]
+                 if d.is_dir() and re.fullmatch(r'\d{4}-\d{2}-\d{2}', d.name)
+                 and (d / 'screener_results.csv').exists()]
     return sorted(date_dirs)[-1]
 sys.path.insert(0, str(ROOT))
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 import dashboard_filters as dfil  # noqa: E402
-from src import on_demand  # noqa: E402
+from src import on_demand, report  # noqa: E402
 
 PASS, FAIL = 'PASS', 'FAIL'
 results = []
@@ -224,10 +228,10 @@ def main():
     _ts_sources = ['ATR1 Trend', 'Blue Dot', 'Black Dot']
     expected_name = ('timing_signals_nasdaq100_cap0_'
                      + on_demand.sources_slug(_ts_sources) + '.csv')
-    cache_p = _latest_run_dir() / expected_name
+    cache_p = report.run_dir() / expected_name
     check('timing tab: scoped results persisted (source-suffixed)',
           cache_p.exists(), f'expected {expected_name}')
-    stale_unsuffixed = _latest_run_dir() / 'timing_signals_nasdaq100_cap0.csv'
+    stale_unsuffixed = report.run_dir() / 'timing_signals_nasdaq100_cap0.csv'
     check('timing tab: no unsuffixed artifact recreated',
           not stale_unsuffixed.exists(),
           'stale pre-fix artifact must stay deleted')
@@ -289,7 +293,7 @@ def main():
           f'opts={len(_chart_sel[0].options) if _chart_sel else 0}')
     # feedback_5 DoD: pt_preset must be part of the C&H file key —
     # verified empirically (strict vs loose -> distinct persisted files)
-    loose_f = _latest_run_dir() / 'patterns_cup_handle_nasdaq100_cap0_loose.csv'
+    loose_f = report.run_dir() / 'patterns_cup_handle_nasdaq100_cap0_loose.csv'
     check('patterns tab: C&H loose persisted under its own key',
           loose_f.exists(), str(loose_f.name))
     for radio in at4.radio:
@@ -298,7 +302,7 @@ def main():
     for b in at4.button:
         if b.key == 'pt_run':
             b.click().run()
-    strict_f = _latest_run_dir() / 'patterns_cup_handle_nasdaq100_cap0_strict.csv'
+    strict_f = report.run_dir() / 'patterns_cup_handle_nasdaq100_cap0_strict.csv'
     check('patterns tab: C&H strict under a DISTINCT key',
           strict_f.exists() and strict_f.name != loose_f.name,
           f'{strict_f.name}')
@@ -333,7 +337,7 @@ def main():
     for conf_choice, conf_bars in (('1m', 21), ('3m', 63)):
         _run_conf(conf_choice)
         expected = _expected_conf_file(conf_choice, conf_bars)
-        exists = (_latest_run_dir() / expected).exists()
+        exists = (report.run_dir() / expected).exists()
         served_conf[conf_choice] = expected
         check(f'GLB confirmation {conf_choice}: served its own cache file',
               exists, f'expected {expected}')
@@ -372,12 +376,59 @@ def main():
     for choice in ('1y', '2y'):
         _run_glb_lookback(choice)
         expected = _expected_glb_file(choice)
-        exists = (_latest_run_dir() / expected).exists()
+        exists = (report.run_dir() / expected).exists()
         served[choice] = expected
         check(f'GLB lookback {choice}: served its own cache file',
               exists, f'expected {expected}')
     check('GLB lookback 1y and 2y keys are DISTINCT',
           served['1y'] != served['2y'], str(served))
+
+    # ---- Confluence tab (IMPLEMENTATION_PLAN.md §19) ----
+    # renders with NO on-demand cache needed (pure aggregation over `full`);
+    # min-families filter + rank-by control + save-as-list.
+    at7 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at7.run()
+    check('confluence tab: boot 0 exceptions', len(at7.exception) == 0,
+          at7.exception[0].message[:120] if at7.exception else '')
+
+    def _cfl_caption_n(at):
+        for c in at.caption:
+            m = re.search(r'([\d,]+) names with', str(c.value))
+            if m:
+                return int(m.group(1).replace(',', ''))
+        return None
+
+    for sl in at7.slider:
+        if sl.key == 'cf_minfam':
+            sl.set_value(2).run()
+    n_at2 = _cfl_caption_n(at7)
+    for sl in at7.slider:
+        if sl.key == 'cf_minfam':
+            sl.set_value(4).run()
+    n_at4 = _cfl_caption_n(at7)
+    check('confluence tab: min-families filter narrows the set',
+          n_at2 is not None and n_at4 is not None and n_at4 <= n_at2,
+          f'>=2: {n_at2}  >=4: {n_at4}')
+
+    for sel in at7.selectbox:
+        if sel.key == 'cf_rank':
+            sel.set_value('confluence_score').run()
+    check('confluence tab: rank-by switch keeps 0 exceptions',
+          len(at7.exception) == 0)
+
+    for sl in at7.slider:
+        if sl.key == 'cf_minfam':
+            sl.set_value(2).run()
+    for ti in at7.text_input:
+        if ti.key == 'cf_list_name':
+            ti.set_value('cfl_test_list').run()
+    for b in at7.button:
+        if b.key == 'cf_save_top':
+            b.click().run()
+    saved = dfil.MY_LISTS / 'cfl_test_list.csv'
+    check('confluence tab: Save top-N writes my_lists/*.csv', saved.exists(),
+          str(saved))
+    saved.unlink(missing_ok=True)
 
     print()
     ok_all = True

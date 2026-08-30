@@ -998,3 +998,180 @@ picture always matches the detector:
 Verification: test_dashboard_app.py **31/31** — new `C&H annotated chart
 renders` check (selectbox present with options; `figure()` returns a
 Figure). validate.py 37/37 unchanged.
+
+---
+
+## 19. Confluence tab — badge-count leaders (2026-08-30)
+
+Source idea: @SteveDJacobs watchlist cards (`docs/BADGES/HPCdWeEWEAAXL6q.jpeg`)
+— run every screener, invert to per-ticker, show the names lit up by the
+most *independent* methods. "Wait for your pitch." It is a **union with a
+membership-count sort**, not an intersection.
+
+Decisions (user, 2026-08-30):
+1. **Dedicated tab** `🎖️ Confluence` — not a view-mode toggle in All Results.
+2. **Opportunistic merge** of on-demand (pattern/timing) badges — no Run
+   button on this tab; fold them in only when today's cache already has a
+   compatible-scope file, else render without them + a hint.
+3. **Rank by `n_families`** (default) — de-correlates "one idea wearing six
+   hats" (Minervini / Qullamaggie / GLP / GMMA-bullish all fundamentally
+   need strong RS + stacked MAs + uptrend).
+4. Legacy `combine.union()` `n_sources` (3 classic leader lists) stays as-is;
+   the wider confluence count is new columns, computed in the tab, not in
+   the daily batch.
+
+### 19.0 Wiring — what "running the confluence" does
+
+**Nothing runs.** The tab is a pure aggregation over the already-loaded
+`full` DataFrame (`load_tables()` → latest `results/YYYY-MM-DD/
+screener_results.csv`), structurally identical to the Focus / Leaders tabs.
+All 16+ batch badges are `in_*` booleans computed once per day for the whole
+universe by `run_screeners.py`; confluence is a vectorized boolean sum over
+them (ms). Freshness = last daily batch, shown as a caption; the existing
+header **"Re-run screeners"** button is the only way to refresh, and the tab
+picks up the new CSV via the normal cache clear. Zero bar-history reads
+(the sparkline column stays lazy per visible ticker).
+
+On-demand badges (GLB/Darvas, Cup & Handle, PVB, ATR1, Blue/Black Dot) live
+only in the `patterns_*` / `timing_signals_*` same-day cache. The tab reads
+those files **if present** for a scope that covers the visible tickers and
+merges the signals as extra badges; if absent, the card renders without them
+and a note: *"Pattern/timing badges appear here after you run the
+Patterns/Timing tabs today for a compatible scope."* `ER-1` (earnings
+proximity) is **out** — no earnings-date field exists.
+
+### 19.1 Badge registry — `src/confluence.py`
+
+Single source of truth: `BADGES` = ordered list of specs, each
+`(code, label, family, test)` where `test(full) -> pd.Series[bool]`.
+`FAMILIES` = ordered list; `CONTEXT` badges render on the card but are
+excluded from every count.
+
+| Family | code → source (column in `screener_results.csv` unless noted) |
+|---|---|
+| **trend_rs** | `MM` in_minervini · `KQ` in_qullamaggie · `GLP` in_gold_launch_pad · `GMMA` gmma_state=="bullish" · `RS90` rs_pct≥90 · `SC` in_scooter |
+| **fundamentals** | `ON` in_canslim · `CE` in_cantata |
+| **accumulation** | `ADL` in_adl_accumulation · `VOL` in_volume_anomaly · `SB9` in_9m_movers · `SBW` in_weekly_movers · `SB4` in_daily_gainers |
+| **breakout** | `52H` in_52w_high_breakout · `NrH` pct_from_52w_high≥−5 · `DB` GLB (on-demand) · `C&H` cup_handle (on-demand) |
+| **pullback** | `EMA20` in_ema20_pullback · `REV` in_downtrend_reversal |
+| **timing** (on-demand) | `PVB` · `ATR1` (atr1_trend=="uptrend") · `blue` · `black` |
+| **context** (not counted) | stage `2A`/`2B`; RTI zone |
+
+Every `test` that reads a column must tolerate the column being absent
+(on-demand families) → all-False Series.
+
+### 19.2 Compute — `confluence.compute(full, extra=None) -> DataFrame`
+
+Returns a copy of `full` with added columns:
+- `bdg_<code>` bool per badge
+- `badges` — list[str] of active codes, in registry order
+- `n_badges` — raw count (context excluded)
+- `families` — list[str] of families with ≥1 active badge
+- `n_families` — **primary rank key**
+- `confluence_score` — 0–100, family-capped (≤2 badges counted per family)
+  then normalised; smoother circle metric / tie-breaker
+- `context` — list[str] (`stage 2A`, `RTI z2` …) for the card
+
+`extra`: `dict[str, pd.Series]` of on-demand signals already reindexed to
+`full.index` (built by the tab from cache files); `None` → those families
+just stay empty. Null-safe join, no error when a file is missing.
+
+### 19.3 Tab UI — `dashboard.py`
+
+Add `tab_confluence` to the `st.tabs([...])` list (after Focus/Leaders,
+before Timing). Controls, mirroring the Timing/Patterns tab idiom:
+- **Scope**: index-membership multiselect + min-market-cap `select_slider`
+  — filters `full` in place (`IDX_MAP` + `full['market_cap']`); **no data
+  load**, unlike Timing/Patterns.
+- **Rank by**: `n_families` (default) · `n_badges` · `confluence_score`
+- **Min families** slider (0–6, default 3)
+- **Must include family** multiselect (empty = no constraint)
+- **Cards to show**: 20 / 30 / 50 / 100 (default 30)
+
+Opportunistic merge: for the resolved scope, look for
+`on_demand.load_cached(report.run_dir(), 'patterns', …)` and
+`'timing_signals'` files whose scope key ⊇ the visible set; when found,
+extract `in_glb_breakout` / `in_cup_handle_*` / `atr1_trend` / dot / pvb
+columns into `extra`. Caption states which on-demand families are live vs
+missing.
+
+### 19.4 Card rendering — the `HPCdWeEWEAAXL6q.jpeg` look
+
+`_confluence_cards(df_top)` builds one `<style>` block + a div per row via
+`st.markdown(unsafe_allow_html=True)` (or `st.html`). Per card:
+- left **accent bar** — green if day-change > 0 else red
+- **ticker** (bold) + day-change %
+- sub-line `market_cap · gain_1m · ADR20%` (`$140.4B · +2.1% · 3.6%`)
+- **badge pills**, background keyed by family colour, wrapping to a 2nd row
+- right: rounded-square = `n_badges`; circle = `n_families`
+  (or `confluence_score` when that's the rank key) — both tier-coloured
+  (grey / green / yellow / orange by cutoffs)
+- `context` shown as faint pills
+
+Render top-N only. Keep a plain `st.dataframe` (badge columns + sparkline,
+`on_select` multi-row) below the cards for full sort / CSV / selection —
+reuses `_spark_closes`.
+
+### 19.5 Export / lists
+
+`d1` download "Confluence CSV" (`compute()` output, rounded);
+`d2` "Save top-N as list" / "Save SELECTED as list" via
+`dfil.save_list()`. Identical pattern to All Results.
+
+### 19.6 Strike-zone number — deferred
+
+The colored circle is `n_families` / `confluence_score` only. No
+AI-assigned expectancy score (backtesting; conflicts with intro.md's
+"unbiased facts" scope). A transparent historical-expectancy column is a
+later, separate effort.
+
+### 19.7 Files
+
+- `src/confluence.py` — `BADGES`, `FAMILIES`, `FAMILY_COLORS`, `compute()`
+- `dashboard.py` — `tab_confluence` block + `_confluence_cards()` helper
+- `docs/confluence.md` — narrative (style of `docs/cup_and_handle.md`):
+  badge families & the correlation rationale, what "running" does/doesn't
+  trigger (§19.0), why rank-by-families
+- `test_confluence.py` — unit tests for `compute()`
+- `test_dashboard_app.py` — AppTest for the tab
+
+### 19.8 Testing
+
+- `compute()` on a synthetic `full`: each `test` fires on the right rows;
+  `n_families` caps per family; `confluence_score` family-capped; `extra`
+  merge null-safe; missing on-demand columns → all-False, no raise.
+- AppTest: tab renders with **no** on-demand cache present; changing
+  "Rank by" reorders; "Min families" filters; "Save top-N as list" writes
+  `my_lists/*.csv`.
+- Guard test: every non-on-demand badge's source column asserted present in
+  a real `screener_results.csv` (catches column renames — feedback_5 class).
+- Target: test_dashboard_app.py green + new suite; validate.py unchanged.
+
+### 19.9 Out of scope
+
+Earnings-proximity badge (no data), AI strike-zone score (§19.6),
+"theme" taxonomy, portfolio "% invested" donut, changing the daily batch
+or `combine.union()`.
+
+### 19.10 Built (2026-08-30)
+
+- `src/confluence.py` — `BADGES` (23: 17 batch + 6 on-demand), `FAMILIES`
+  (6), `FAMILY_COLORS`, `BATCH_SOURCE_COLS`, `compute(full, extra=None)`,
+  `rank(df, by='n_families')`, `merge_ondemand(run_dir, index)`.
+- `dashboard.py` — `tab_confluence` between All Results and Timing;
+  `_confluence_cards()` renders the stacked cards (accent bar, family-colour
+  pills, context pills, `n_badges` square + rank-metric circle, tier
+  colours) via `st.markdown(unsafe_allow_html=True)`; scope filter over
+  `full` (no data load); opportunistic `merge_ondemand` from `report.run_dir()`;
+  ranked `st.dataframe` + sparkline + multi-row select; Download CSV /
+  Save top-N / Save SELECTED as list.
+- `test_confluence.py` — 18 checks (badge firing, family cap, `extra`
+  null-safety, missing-column tolerance, rank tie-breaks, live-CSV column
+  guard). `test_dashboard_app.py` — +4 checks (**35/35**).
+- **Deviation / incidental fix:** the on-demand tabs call `report.run_dir()`
+  on every dashboard boot, which `mkdir`s an empty `results/<today>/` when no
+  batch ran today. `_latest_run_dir()` in both `validate.py` and
+  `test_dashboard_app.py` picked that empty dir → `FileNotFoundError`. Both
+  helpers now require `screener_results.csv` (matching the dashboard's own
+  `latest_run_dir()`); the timing/patterns cache-file assertions in the test
+  switched to `report.run_dir()` directly. validate.py 37/37 unchanged.

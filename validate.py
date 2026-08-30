@@ -25,10 +25,12 @@ ROOT = Path(__file__).resolve().parent
 
 
 def _latest_run_dir():
-    """Newest results/YYYY-MM-DD directory (ignore non-date entries like
-    glb_cache/ or my_lists/)."""
+    """Newest results/YYYY-MM-DD batch dir holding screener_results.csv
+    (same guard as the dashboard's own latest_run_dir(); the on-demand
+    tabs mkdir an empty today/ dir on every dashboard boot)."""
     date_dirs = [d for d in (ROOT / 'results').iterdir()
-                 if d.is_dir() and re.fullmatch(r'\d{4}-\d{2}-\d{2}', d.name)]
+                 if d.is_dir() and re.fullmatch(r'\d{4}-\d{2}-\d{2}', d.name)
+                 and (d / 'screener_results.csv').exists()]
     return sorted(date_dirs)[-1]
 sys.path.insert(0, str(ROOT))
 

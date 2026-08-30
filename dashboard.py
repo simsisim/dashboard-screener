@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / 'results'
 sys.path.insert(0, str(ROOT))
 import config  # noqa: E402  (module-root paths)
-from src import data_loader, on_demand, report  # noqa: E402
+from src import confluence, data_loader, on_demand, report  # noqa: E402
 from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 
@@ -131,9 +131,10 @@ if c2.button('Re-run screeners', on_click=rerun_screeners):
     pass
 st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md there.")
 
-tab_focus, tab_leaders, tab_all, tab_timing, tab_patterns, tab_detail = st.tabs(
+(tab_focus, tab_leaders, tab_all, tab_confluence, tab_timing, tab_patterns,
+ tab_detail) = st.tabs(
     ['🎯 Focus List', '🏆 Leaders’ Lists', '🔎 All Results (filter panel)',
-     '🕐 Timing Signals', '🌊 Patterns', '📋 Ticker detail'])
+     '🎖️ Confluence', '🕐 Timing Signals', '🌊 Patterns', '📋 Ticker detail'])
 
 # ------------------------------------------ All Results (sketch layout) --
 import dashboard_filters as dfil  # noqa: E402
@@ -623,6 +624,195 @@ with tab_focus:
                            file_name=f'focus_list_{run.name}.csv')
     else:
         st.info('Empty focus list in this run.')
+
+# --------------------------------------------------------- confluence ----
+# IMPLEMENTATION_PLAN.md §19 — badge-count leaders. Pure aggregation over the
+# daily batch's screener_results.csv (`full`); nothing here runs a screener.
+# On-demand pattern/timing badges are merged opportunistically from today's
+# cache when the Patterns/Timing tabs have already produced it.
+_CFL_CSS = """
+<style>
+.cfl-wrap { display:flex; flex-direction:column; gap:8px; }
+.cfl-card { display:flex; justify-content:space-between; align-items:center;
+  gap:12px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08);
+  border-left:4px solid #64748b; border-radius:10px; padding:10px 14px; }
+.cfl-head { display:flex; align-items:baseline; gap:10px; }
+.cfl-tkr { font-weight:700; font-size:1.05rem; }
+.cfl-chg { font-weight:600; font-size:.9rem; }
+.cfl-sub { color:#94a3b8; font-size:.8rem; margin:2px 0 6px; }
+.cfl-badges { display:flex; flex-wrap:wrap; gap:5px; }
+.cfl-pill { font-size:.72rem; font-weight:700; color:#0b1220; border-radius:6px;
+  padding:2px 7px; line-height:1.5; }
+.cfl-ctx { background:transparent; color:#94a3b8; border:1px solid rgba(255,255,255,.18);
+  font-weight:500; }
+.cfl-scores { display:flex; gap:8px; flex:0 0 auto; }
+.cfl-sq, .cfl-ci { width:42px; height:42px; display:flex; align-items:center;
+  justify-content:center; font-weight:700; color:#0b1220; font-size:.95rem; }
+.cfl-sq { border-radius:9px; } .cfl-ci { border-radius:50%; }
+</style>
+"""
+
+
+def _cfl_cap(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return '—'
+    for unit, div in (('T', 1e12), ('B', 1e9), ('M', 1e6)):
+        if v >= div:
+            return f'${v / div:.1f}{unit}'
+    return f'${v:,.0f}'
+
+
+def _cfl_tier(v, steps):
+    col = steps[0][1]
+    for thr, c in steps:
+        if v >= thr:
+            col = c
+    return col
+
+
+_FAM_STEPS = [(0, '#64748b'), (2, '#22c55e'), (3, '#eab308'), (4, '#f97316')]
+_BADGE_STEPS = [(0, '#64748b'), (3, '#22c55e'), (5, '#eab308'), (7, '#f97316')]
+_SCORE_STEPS = [(0, '#64748b'), (30, '#22c55e'), (50, '#eab308'), (70, '#f97316')]
+
+
+def _confluence_cards(df_top: pd.DataFrame, circle_key: str):
+    fam_c = confluence.FAMILY_COLORS
+    fam_of = confluence.BADGE_FAMILY
+    rows = [_CFL_CSS, '<div class="cfl-wrap">']
+    for t, r in df_top.iterrows():
+        chg = pd.to_numeric(pd.Series([r.get('daily_gain_pct')]),
+                            errors='coerce').iloc[0]
+        accent = ('#22c55e' if pd.notna(chg) and chg > 0
+                  else '#ef4444' if pd.notna(chg) and chg < 0 else '#64748b')
+        chg_html = (f'<span class="cfl-chg" style="color:{accent}">'
+                    f'{chg:+.1f}%</span>' if pd.notna(chg) else '')
+        g1m = r.get('gain_1m')
+        adr = r.get('adr20_pct')
+        sub = ' · '.join(filter(None, [
+            _cfl_cap(r.get('market_cap')),
+            f'{g1m:+.1f}% 1m' if pd.notna(g1m) else None,
+            f'ADR {adr:.1f}%' if pd.notna(adr) else None]))
+        pills = ''.join(
+            f'<span class="cfl-pill" style="background:{fam_c[fam_of[c]]}" '
+            f'title="{confluence.BADGE_LABEL[c]}">{c}</span>'
+            for c in r['badges'])
+        pills += ''.join(f'<span class="cfl-pill cfl-ctx">{tag}</span>'
+                         for tag in r['context'])
+        circ_val = r[circle_key]
+        circ_col = _cfl_tier(circ_val,
+                             _SCORE_STEPS if circle_key == 'confluence_score'
+                             else _FAM_STEPS)
+        rows.append(
+            f'<div class="cfl-card" style="border-left-color:{accent}">'
+            f'<div class="cfl-main">'
+            f'<div class="cfl-head"><span class="cfl-tkr">{t}</span>'
+            f'{chg_html}</div>'
+            f'<div class="cfl-sub">{sub}</div>'
+            f'<div class="cfl-badges">{pills}</div></div>'
+            f'<div class="cfl-scores">'
+            f'<span class="cfl-sq" style="background:'
+            f'{_cfl_tier(r["n_badges"], _BADGE_STEPS)}" '
+            f'title="{r["n_badges"]} badges">{r["n_badges"]}</span>'
+            f'<span class="cfl-ci" style="background:{circ_col}" '
+            f'title="{circle_key}">{circ_val:.0f}</span></div></div>')
+    rows.append('</div>')
+    return '\n'.join(rows)
+
+
+with tab_confluence:
+    st.caption('Badge-count leaders — the names lit up by the most independent '
+               'method *families*. Pure aggregation over the latest daily run '
+               f'(`{run.name}`); press "Re-run screeners" above to refresh. '
+               'Pattern/timing badges (DB, C&H, PVB, ATR1, dots) appear only '
+               'when the Patterns/Timing tabs have been run today.')
+
+    cf1, cf2, cf3 = st.columns([3, 2, 2])
+    cf_indexes = cf1.multiselect('Scope: index membership', index_choices(),
+                                 key='cf_index',
+                                 help='empty = whole universe')
+    cf_cap = cf2.select_slider('Min market cap',
+                               options=[0, 300e6, 1e9, 2e9, 10e9], value=0,
+                               key='cf_cap', format_func=lambda v: f'${v:,.0f}')
+    cf_rank = cf3.selectbox('Rank by', ['n_families', 'n_badges',
+                                        'confluence_score'], key='cf_rank')
+    cf4, cf5, cf6 = st.columns([2, 2, 2])
+    cf_minfam = cf4.slider('Min families', 0, len(confluence.FAMILIES), 3,
+                           key='cf_minfam')
+    cf_must = cf5.multiselect('Must include family', confluence.FAMILIES,
+                              key='cf_must')
+    cf_n = cf6.selectbox('Cards to show', [20, 30, 50, 100], index=1,
+                         key='cf_n')
+
+    # scope mask over `full` — no data load, no compute of screeners
+    cf_mask = pd.Series(True, index=full.index)
+    if cf_indexes:
+        _sel = set(cf_indexes)
+        cf_mask &= pd.Series(full.index.map(
+            lambda t: bool(IDX_MAP.get(str(t).upper(), frozenset()) & _sel)),
+            index=full.index)
+    if cf_cap:
+        cf_mask &= pd.to_numeric(full['market_cap'], errors='coerce').fillna(0) >= cf_cap
+    scoped = full[cf_mask]
+
+    cf_extra = confluence.merge_ondemand(report.run_dir(), scoped.index)
+    st.caption(f'{len(scoped):,} tickers in scope · on-demand badges '
+               + (f'live: {", ".join(cf_extra)}' if cf_extra
+                  else 'none cached today'))
+
+    cf_df = confluence.compute(scoped, cf_extra)
+    cf_df = cf_df[cf_df['n_families'] >= cf_minfam]
+    for fam in cf_must:
+        cf_df = cf_df[cf_df['families'].apply(lambda fs: fam in fs)]
+    cf_df = confluence.rank(cf_df, cf_rank)
+
+    st.caption(f'{len(cf_df):,} names with ≥ {cf_minfam} families')
+    if not len(cf_df):
+        st.info('No names meet the family threshold in this scope.')
+    else:
+        top = cf_df.head(int(cf_n))
+        st.markdown(_confluence_cards(top, cf_rank), unsafe_allow_html=True)
+
+        st.divider()
+        bdg_cols = [f'bdg_{c}' for c, *_ in confluence.BADGES]
+        tbl_cols = (['n_families', 'n_badges', 'confluence_score', 'close',
+                     'daily_gain_pct', 'gain_1m', 'adr20_pct', 'stage',
+                     'rs_pct', 'scooter_score', 'market_cap', 'sector']
+                    + bdg_cols)
+        tbl_cols = [c for c in tbl_cols if c in cf_df.columns]
+        tbl = cf_df[tbl_cols].copy()
+        if len(tbl) <= 200:
+            tbl.insert(1, 'spark',
+                       [_spark_closes(t, run.name) for t in tbl.index])
+        cf_event = st.dataframe(
+            tbl.round(2), use_container_width=True,
+            height=min(120 + 32 * max(1, len(tbl)), 720),
+            on_select='rerun', selection_mode='multi-row', key='cf_sel',
+            column_config={'spark': st.column_config.LineChartColumn(
+                '120d', width=150)})
+        try:
+            cf_rows = cf_event.selection.rows
+        except AttributeError:
+            cf_rows = (cf_event.get('selection', {}) or {}).get('rows', []) \
+                if isinstance(cf_event, dict) else []
+        cf_selected = list(tbl.index[cf_rows]) if cf_rows else []
+
+        e1, e2, e3 = st.columns([1, 1, 3])
+        e1.download_button(
+            'Download CSV (ranked)',
+            cf_df[tbl_cols + ['badges', 'families']].round(3).to_csv().encode(),
+            file_name=f'confluence_{run.name}.csv')
+        cf_ln = e2.text_input('List name', key='cf_list_name',
+                              placeholder='list name…')
+        cf_save_sel = e2.button('Save SELECTED as list', key='cf_save_sel',
+                                disabled=not (cf_ln.strip() and cf_selected))
+        cf_save_top = e3.button(f'Save top {int(cf_n)} as list',
+                                key='cf_save_top', disabled=not cf_ln.strip())
+        if (cf_save_sel or cf_save_top) and cf_ln.strip():
+            _tk = cf_selected if cf_save_sel else list(top.index)
+            dfil.save_list(cf_ln.strip(), _tk)
+            st.success(f'saved {len(_tk)} tickers to my_lists/{cf_ln.strip()}.csv')
 
 # ------------------------------------------------------------- detail -----
 with tab_detail:
