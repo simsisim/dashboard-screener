@@ -25,6 +25,7 @@ RESULTS = ROOT / 'results'
 sys.path.insert(0, str(ROOT))
 import config  # noqa: E402  (module-root paths)
 from src import confluence, data_loader, on_demand, report  # noqa: E402
+from src import workflow as wf_engine  # noqa: E402
 from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 
@@ -132,9 +133,10 @@ if c2.button('Re-run screeners', on_click=rerun_screeners):
 st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md there.")
 
 (tab_focus, tab_leaders, tab_all, tab_confluence, tab_timing, tab_patterns,
- tab_detail) = st.tabs(
+ tab_workflows, tab_detail) = st.tabs(
     ['🎯 Focus List', '🏆 Leaders’ Lists', '🔎 All Results (filter panel)',
-     '🎖️ Confluence', '🕐 Timing Signals', '🌊 Patterns', '📋 Ticker detail'])
+     '🎖️ Confluence', '🕐 Timing Signals', '🌊 Patterns', '🧭 Workflows',
+     '📋 Ticker detail'])
 
 # ------------------------------------------ All Results (sketch layout) --
 import dashboard_filters as dfil  # noqa: E402
@@ -425,51 +427,12 @@ with tab_all:
         else:
             selections[key] = val
 
+    # threshold grid + the whole Advanced panel (sector/industry included) —
+    # build_advanced_mask is the single source of truth, shared with the
+    # Workflows tab engine (src/workflow.py); feedback: workflows_tab.md §4
     mask = dfil.build_mask(full, selections)
-    if st.session_state['sel_sector']:
-        mask &= full['sector'].isin(st.session_state['sel_sector'])
-    if st.session_state['sel_industry']:
-        mask &= full['industry'].isin(st.session_state['sel_industry'])
-    if st.session_state['adv_leaders']:
-        cols = [f'in_{s}' for s in st.session_state['adv_leaders']]
-        if all(c in full.columns for c in cols):
-            flags = full[cols].fillna(False).astype(bool)
-            mask &= (flags.any(axis=1)
-                     if st.session_state['adv_leaders_mode'].startswith('Any')
-                     else flags.all(axis=1))
-    if st.session_state['adv_stages']:
-        mask &= full['stage'].isin(st.session_state['adv_stages'])
-    if st.session_state['adv_max_ext'] < 10.0:
-        mask &= (full['ext_21ema_atr'].fillna(99) <= st.session_state['adv_max_ext']) & \
-                (full['ext_40sma_atr'].fillna(99) <= st.session_state['adv_max_ext'])
-    mask &= full['rs_pct'].fillna(0) >= st.session_state['adv_min_rs']
-    if 'minervini_count' in full.columns:
-        mask &= full['minervini_count'].fillna(0) >= st.session_state['adv_min_count']
-    if st.session_state['adv_rti_zone']:
-        mask &= full['rti_zone'].isin(st.session_state['adv_rti_zone'])
-    if st.session_state['adv_rti_dots']:
-        mask &= full['rti_dots'].fillna(False).astype(bool)
-    if st.session_state['adv_rti_exp']:
-        mask &= full['rti_expansion'].fillna(False).astype(bool)
-    for _flag in ('adv_9m_movers', 'adv_weekly_movers', 'adv_daily_gainers',
-                  'adv_gold_launch_pad', 'adv_qullamaggie',
-                  'adv_volume_anomaly', 'adv_adl_accumulation',
-                  'adv_52w_high_breakout', 'adv_52w_low_breakdown',
-                  'adv_ema20_pullback', 'adv_downtrend_reversal',
-                  'adv_cantata'):
-        if st.session_state.get(_flag):
-            mask &= full[f'in_{_flag[4:]}'].fillna(False).astype(bool)
-    if st.session_state.get('adv_ce_min', 0.0) > 0 and 'ce_score' in full.columns:
-        mask &= full['ce_score'].fillna(0) >= st.session_state['adv_ce_min']
-    if st.session_state.get('adv_gmma_state'):
-        mask &= full['gmma_state'].isin(st.session_state['adv_gmma_state'])
-    if st.session_state['adv_exchange']:
-        mask &= full['exchange'].isin(st.session_state['adv_exchange']).fillna(False)
-    if st.session_state['adv_index']:
-        _sel = set(st.session_state['adv_index'])
-        mask &= pd.Series(full.index.map(
-            lambda t: bool(IDX_MAP.get(str(t).upper(), frozenset()) & _sel)),
-            index=full.index)
+    mask &= dfil.build_advanced_mask(
+        full, {k: st.session_state[k] for k in dfil.ADVANCED_DEFAULTS}, IDX_MAP)
     if active_list:
         _variants = {t.replace('.', '-') for t in active_list}
         mask &= pd.Series(full.index.isin(active_list) | full.index.isin(_variants),
@@ -1348,3 +1311,425 @@ with tab_patterns:
     elif pt_results is not None:
         st.info('Run completed: 0 patterns detected in this scope with '
                 'the current parameters.')
+
+# ------------------------------------------------------ Workflows (in-memory)
+# docs/workflows_tab.md — a saved multi-stage funnel run end-to-end over the
+# latest daily screener_results.csv. No screener re-run, no data load: every
+# stage just row-filters `full` with dfil.build_mask + build_advanced_mask.
+
+def _wf_md(txt) -> str:
+    """Escape workflow-authored text for st.caption/markdown — a bare
+    '$' pair renders as LaTeX (e.g. 'price>$3 ... ADV>$1M')."""
+    return str(txt).replace('$', r'\$')
+
+
+WF_STEP_COLS = ['close', 'adr20_pct', 'rti_zone', 'ext_21ema_atr',
+                'ext_40sma_atr', 'pct_above_63d_low', 'gain_1m', 'gain_3m',
+                'gain_6m', 'rs_pct', 'stage', 'sector']
+WF_EDITOR_FLAGS = {
+    'adv_gold_launch_pad': 'Golden Launch Pad',
+    'adv_qullamaggie': 'Qullamaggie suite',
+    'adv_9m_movers': 'Stockbee 9M mover',
+    'adv_weekly_movers': 'Stockbee 20% weekly',
+    'adv_daily_gainers': 'Stockbee 4% daily',
+    'adv_volume_anomaly': 'Volume anomaly (3σ)',
+    'adv_adl_accumulation': 'ADL accumulation',
+    'adv_cantata': 'CANTATA CE leader',
+    'adv_rti_dots': 'RTI low-vol dots',
+}
+_WF_EXPOSED_ADV = ({'adv_leaders', 'adv_leaders_mode', 'adv_stages',
+                    'adv_rti_zone', 'adv_max_ext'} | set(WF_EDITOR_FLAGS))
+
+
+def _wf_unique_stage_name(base: str, draft: dict) -> str:
+    names = {s['name'] for s in draft['stages']}
+    if base not in names:
+        return base
+    i = 2
+    while f'{base} ({i})' in names:
+        i += 1
+    return f'{base} ({i})'
+
+
+def _wf_unique_workflow_name(base: str) -> str:
+    taken = set(dfil.builtin_workflows()) | set(dfil.saved_workflows())
+    if base not in taken:
+        return base
+    i = 2
+    while f'{base} ({i})' in taken:
+        i += 1
+    return f'{base} ({i})'
+
+
+def _wf_stage_editor(draft: dict, i: int):
+    """Inline editor for draft['stages'][i]. Rendered in an st.form; every
+    widget key carries wf_ed_nonce so re-opening seeds fresh from the stage
+    (same trick as _apply_preset's re-seed marker)."""
+    n = st.session_state['wf_ed_nonce']
+    stg = draft['stages'][i]
+    existing_sel = dict(stg.get('selections', {}))
+    carried_custom = {k: v for k, v in existing_sel.items()
+                      if isinstance(v, (list, tuple)) and v and v[0] == 'custom'}
+    adv0 = dict(stg.get('advanced', {}))
+    carried_adv = {k: v for k, v in adv0.items() if k not in _WF_EXPOSED_ADV}
+
+    with st.form(f'wf_editor_{n}', border=True):
+        st.markdown(f'**✎ Edit stage {i + 1}**')
+        e1, e2 = st.columns(2)
+        name = e1.text_input('Stage name', value=stg['name'],
+                             key=f'wfe{n}_name')
+        src_opts = ['universe'] + [s['name'] for s in draft['stages'][:i]]
+        cur_src = stg.get('source', 'universe')
+        src = e2.selectbox('Input from', src_opts,
+                           index=src_opts.index(cur_src)
+                           if cur_src in src_opts else 0,
+                           key=f'wfe{n}_src',
+                           help='the full universe, or an earlier stage')
+        fin = st.checkbox('★ this stage contributes to the Focus List',
+                          value=bool(stg.get('focus_input')), key=f'wfe{n}_fin')
+        note = st.text_area('Note / rationale', value=stg.get('note', ''),
+                            key=f'wfe{n}_note', height=68)
+
+        if carried_custom:
+            st.caption('custom ranges kept as-is: ' + ', '.join(
+                f'{dfil.SPEC_BY_KEY[k][0]} {v[1]:g}–{v[2]:g}'
+                for k, v in carried_custom.items()))
+
+        st.markdown('**Stage filter** — same grid as the All Results panel')
+        match = st.radio(
+            'Combine the filters below with', ['all (AND)', 'any (OR)'],
+            index=1 if stg.get('match') == 'any' else 0,
+            key=f'wfe{n}_match', horizontal=True,
+            help='“any (OR)” lets one stage express a union — e.g. Ollie’s '
+                 '1M / 3M / 6M momentum scans')
+        new_sel = {}
+        grid = st.columns(4)
+        for j, (fkey, flabel, _col, fam) in enumerate(dfil.FILTER_SPECS):
+            opts = [lbl for lbl, _ in dfil.THRESHOLD_FAMILIES[fam]]
+            cur = existing_sel.get(fkey, 'All')
+            cur = cur if cur in opts else 'All'
+            pick = grid[j % 4].selectbox(flabel, opts,
+                                         index=opts.index(cur),
+                                         key=f'wfe{n}_f_{fkey}')
+            if pick != 'All':
+                new_sel[fkey] = pick
+
+        with st.expander('Advanced', expanded=bool(adv0)):
+            a_lead = st.multiselect(
+                'Leaders lists', ['minervini', 'canslim', 'scooter', 'cantata'],
+                default=adv0.get('adv_leaders', []), key=f'wfe{n}_lead')
+            a_mode = st.radio(
+                'Combine leaders', ['Any (union)', 'All (intersection)'],
+                index=0 if adv0.get('adv_leaders_mode', 'Any (union)'
+                                    ).startswith('Any') else 1,
+                key=f'wfe{n}_mode', horizontal=True)
+            a_stg = st.multiselect(
+                'Weinstein stage', ['1', '2A', '2B', '2C', '3', '4'],
+                default=adv0.get('adv_stages', []), key=f'wfe{n}_stg')
+            a_rti = st.multiselect(
+                'RTI zone', ['1', '2', '3'],
+                default=adv0.get('adv_rti_zone', []), key=f'wfe{n}_rti')
+            a_ext = st.slider(
+                'max ext (ATR, both MAs; 10 = off)', -5.0, 10.0,
+                value=float(adv0.get('adv_max_ext', 10.0)), step=0.5,
+                key=f'wfe{n}_ext')
+            fcols = st.columns(3)
+            a_flags = {}
+            for k, (fk, fl) in enumerate(WF_EDITOR_FLAGS.items()):
+                a_flags[fk] = fcols[k % 3].checkbox(
+                    fl, value=bool(adv0.get(fk)), key=f'wfe{n}_{fk}')
+            if carried_adv:
+                st.caption('other advanced keys kept from the JSON: '
+                           + ', '.join(carried_adv))
+
+        c_apply, c_cancel = st.columns(2)
+        applied = c_apply.form_submit_button('Apply stage', type='primary')
+        cancelled = c_cancel.form_submit_button('Cancel')
+
+    if cancelled:
+        st.session_state['wf_edit_idx'] = -1
+        st.session_state['wf_ed_nonce'] += 1
+        st.rerun()
+    if applied:
+        new_sel.update(carried_custom)
+        new_adv = dict(carried_adv)
+        if a_lead:
+            new_adv['adv_leaders'] = a_lead
+            new_adv['adv_leaders_mode'] = a_mode
+        if a_stg:
+            new_adv['adv_stages'] = a_stg
+        if a_rti:
+            new_adv['adv_rti_zone'] = a_rti
+        if a_ext < 10.0:
+            new_adv['adv_max_ext'] = a_ext
+        for fk, v in a_flags.items():
+            if v:
+                new_adv[fk] = True
+        stg2 = {'name': name.strip() or stg['name'], 'source': src,
+                'note': note.strip()}
+        if match.startswith('any') and len(new_sel) > 1:
+            stg2['match'] = 'any'
+        if new_sel:
+            stg2['selections'] = new_sel
+        if new_adv:
+            stg2['advanced'] = new_adv
+        if fin:
+            stg2['focus_input'] = True
+        draft['stages'][i] = stg2
+        st.session_state['wf_edit_idx'] = -1
+        st.session_state['wf_ed_nonce'] += 1
+        st.rerun()
+
+
+def _wf_cb_edit():
+    """on_click: open the selected workflow for editing (built-ins as a
+    copy). Widget-keyed state (wf_mode / wf_selected) can only be written
+    from a callback — it runs before the widgets re-instantiate."""
+    name = st.session_state.get('wf_selected')
+    src = dfil.load_workflow(name) or {'name': name, 'stages': []}
+    if dfil.is_builtin_workflow(name):
+        src['name'] = _wf_unique_workflow_name(f'{name} (mine)')
+    _wf_open_draft(src)
+
+
+def _wf_cb_new():
+    _wf_open_draft({
+        'name': _wf_unique_workflow_name('New workflow'), 'description': '',
+        'stages': [{'name': 'Stage 1', 'source': 'universe'}], 'checklist': []})
+
+
+def _wf_open_draft(src: dict):
+    """Seed the build-view state for `src` — the name/checklist editor keys
+    are seeded here (from a callback) so the widgets can omit value= and
+    just persist their own edits afterwards."""
+    st.session_state['wf_draft'] = src
+    st.session_state['wf_edit_idx'] = -1
+    st.session_state['wf_mode'] = '✎ Build view'
+    st.session_state['wf_save_name'] = src.get('name', '')
+    st.session_state['wf_cl_edit'] = '\n'.join(src.get('checklist', []))
+
+
+def _wf_cb_delete():
+    name = st.session_state.get('wf_selected')
+    if name and not dfil.is_builtin_workflow(name):
+        dfil.delete_workflow(name)
+        st.session_state.pop('wf_selected', None)
+        st.session_state['wf_flash'] = f'deleted workflow {name}'
+
+
+def _wf_cb_discard():
+    st.session_state['wf_draft'] = None
+    st.session_state['wf_mode'] = '▶ Run view'
+
+
+def _wf_cb_save():
+    draft = st.session_state.get('wf_draft')
+    if not draft:
+        return
+    name = (st.session_state.get('wf_save_name') or '').strip()
+    if not name:
+        st.session_state['wf_error'] = 'workflow name is required'
+        return
+    draft['checklist'] = [ln.strip() for ln
+                          in (st.session_state.get('wf_cl_edit') or '')
+                          .splitlines() if ln.strip()]
+    errs = wf_engine.validate_workflow(draft)
+    if dfil.is_builtin_workflow(name):
+        errs.append('name collides with a built-in — pick another')
+    if errs:
+        st.session_state['wf_error'] = ' • '.join(errs)
+        return
+    dfil.save_workflow(name, draft)
+    st.session_state['wf_draft'] = None
+    st.session_state['wf_selected'] = name
+    st.session_state['wf_mode'] = '▶ Run view'
+    st.session_state['wf_flash'] = f'saved my_workflows/{name}.json'
+
+
+with tab_workflows:
+    st.session_state.setdefault('wf_draft', None)
+    st.session_state.setdefault('wf_edit_idx', -1)
+    st.session_state.setdefault('wf_ed_nonce', 0)
+
+    _bi = list(dfil.builtin_workflows())
+    _saved = dfil.saved_workflows()
+    wf_names = _bi + [s for s in _saved if s not in _bi]
+
+    tw1, tw2 = st.columns([3, 2])
+    wf_sel = tw1.selectbox('Workflow', wf_names, key='wf_selected')
+    wf_mode = tw2.radio('View', ['▶ Run view', '✎ Build view'],
+                        key='wf_mode', horizontal=True)
+    is_bi = dfil.is_builtin_workflow(wf_sel)
+
+    b1, b2, b3, _b4 = st.columns([1.3, 1, 1, 3])
+    b1.button('✎ Edit / Duplicate', key='wf_edit_btn', on_click=_wf_cb_edit,
+              help='built-ins open as an editable copy')
+    b2.button('＋ New', key='wf_new_btn', on_click=_wf_cb_new)
+    b3.button('🗑 Delete', key='wf_del_btn', on_click=_wf_cb_delete,
+              disabled=is_bi or wf_sel not in _saved,
+              help='saved workflows only')
+    _flash = st.session_state.pop('wf_flash', None)
+    if _flash:
+        st.success(_flash)
+    _wf_err = st.session_state.pop('wf_error', None)
+    if _wf_err:
+        st.error(_wf_err)
+
+    st.caption(f'data as of `{run.name}` · read-only — press '
+               '“Re-run screeners” at the top to refresh the underlying data. '
+               'A workflow is a **sequential funnel**; for “how many methods '
+               'agree on a name” use the Confluence tab.')
+    st.divider()
+
+    # ---------------------------------------------------------- RUN VIEW ----
+    if wf_mode.startswith('▶'):
+        wf = dfil.load_workflow(wf_sel)
+        if is_bi:
+            st.caption('🔒 built-in — click **✎ Edit / Duplicate** to change '
+                       'the stages or the checklist.')
+        res = None
+        try:
+            res = wf_engine.run_workflow(full, wf, IDX_MAP)
+        except Exception as e:                                  # noqa: BLE001
+            st.error(f'workflow could not run: {e}')
+        if res is not None:
+            if wf.get('description'):
+                st.caption(_wf_md(wf['description']))
+            for i, (sr, sd) in enumerate(zip(res.stages, wf['stages'])):
+                with st.container(border=True):
+                    h1, h2 = st.columns([5, 1])
+                    star = ' ★ feeds Focus List' if sr.focus_input else ''
+                    src_lbl = ('full universe' if sr.source == 'universe'
+                               else f'Stage — {sr.source}')
+                    h1.markdown(f"**{i + 1}. {sr.name}**{star}")
+                    h1.caption(_wf_md(f'from: {src_lbl}  ·  '
+                                     f'{wf_engine.stage_summary(sd)}'))
+                    if sr.note:
+                        h1.caption(_wf_md(f'✎ {sr.note}'))
+                    h2.markdown(f"`{sr.n_in:,} → `**`{sr.n_out:,}`**")
+                    with st.expander(f'show table ({sr.n_out})'):
+                        _cols = [c for c in WF_STEP_COLS if c in sr.frame.columns]
+                        st.dataframe(sr.frame[_cols].round(2),
+                                     use_container_width=True,
+                                     height=min(90 + 32 * max(1, len(sr.frame)),
+                                                420))
+
+            st.subheader(f'📋 Focus List — {len(res.focus):,} names')
+            if len(res.focus):
+                _fc = [c for c in WF_STEP_COLS if c in res.focus.columns]
+                ftab = res.focus[_fc].round(2).copy()
+                fcfg = None
+                if len(ftab) <= 200:
+                    ftab.insert(1, 'spark',
+                                [_spark_closes(t, run.name) for t in ftab.index])
+                    fcfg = {'spark': st.column_config.LineChartColumn(
+                        '120d', width=140)}
+                st.dataframe(ftab, use_container_width=True, column_config=fcfg,
+                             height=min(120 + 34 * max(1, len(ftab)), 640))
+                fa1, fa2, _fa3 = st.columns([1, 1, 2])
+                fa1.download_button(
+                    'Download CSV', res.focus.round(3).to_csv().encode(),
+                    file_name=f'workflow_focus_{run.name}.csv',
+                    key='wf_focus_csv')
+                _ln = fa2.text_input('List name', key='wf_focus_ln',
+                                     placeholder='list name…')
+                if fa2.button('Save as list', key='wf_focus_save',
+                              disabled=not _ln.strip()):
+                    dfil.save_list(_ln.strip(), res.focus.index)
+                    st.success(f'saved {len(res.focus)} tickers to '
+                               f'my_lists/{_ln.strip()}.csv')
+            else:
+                st.info('No names survived this workflow in the latest run.')
+
+            if res.checklist:
+                st.subheader('✅ Manual checklist')
+                st.caption('Not computed — needs pre-market / catalyst / '
+                           'breadth data. Confirm each before an entry.')
+                for ci, item in enumerate(res.checklist):
+                    st.checkbox(item, key=f'wf_cl_{wf_sel}_{ci}')
+
+    # -------------------------------------------------------- BUILD VIEW ----
+    else:
+        draft = st.session_state.get('wf_draft')
+        if draft is None:
+            st.info('Pick a workflow above and click **✎ Edit / Duplicate** '
+                    '(or **＋ New**) to start building.')
+        else:
+            if dfil.is_builtin_workflow(wf_sel) and draft.get('name') != wf_sel:
+                st.caption('✎ editing a **copy** of the built-in — it will be '
+                           'saved as a new workflow.')
+            st.markdown(f"**Editing:** `{draft.get('name', '?')}`  ·  "
+                        f"{len(draft['stages'])} stage(s)")
+
+            dbyname = {}
+            try:
+                dbyname = wf_engine.run_workflow(full, draft, IDX_MAP).by_name
+            except Exception as e:                              # noqa: BLE001
+                st.warning(f'draft not fully runnable yet: {e}')
+
+            for i, stg in enumerate(draft['stages']):
+                r1, r2, r3 = st.columns([4, 1.4, 3])
+                fin = ' ★' if stg.get('focus_input') else ''
+                r1.markdown(f"**{i + 1}. {stg['name']}**{fin}")
+                r1.caption(_wf_md(f"from: {stg.get('source', 'universe')}"
+                             f"  ·  {wf_engine.stage_summary(stg)}"))
+                _sr = dbyname.get(stg['name'])
+                r2.markdown(f"`{_sr.n_in:,}→{_sr.n_out:,}`" if _sr else '`—`')
+                bc = r3.columns(5)
+                if bc[0].button('↑', key=f'wf_up_{i}', disabled=i == 0):
+                    draft['stages'][i - 1], draft['stages'][i] = \
+                        draft['stages'][i], draft['stages'][i - 1]
+                    st.session_state['wf_edit_idx'] = -1
+                    st.rerun()
+                if bc[1].button('↓', key=f'wf_dn_{i}',
+                                disabled=i == len(draft['stages']) - 1):
+                    draft['stages'][i + 1], draft['stages'][i] = \
+                        draft['stages'][i], draft['stages'][i + 1]
+                    st.session_state['wf_edit_idx'] = -1
+                    st.rerun()
+                if bc[2].button('✎', key=f'wf_edit_{i}',
+                                help='edit this stage'):
+                    st.session_state['wf_edit_idx'] = i
+                    st.session_state['wf_ed_nonce'] += 1
+                    st.rerun()
+                if bc[3].button('⧉', key=f'wf_dupe_{i}',
+                                help='duplicate this stage'):
+                    import copy as _copy
+                    ns = _copy.deepcopy(stg)
+                    ns['name'] = _wf_unique_stage_name(
+                        ns['name'] + ' copy', draft)
+                    ns['focus_input'] = False
+                    draft['stages'].insert(i + 1, ns)
+                    st.session_state['wf_edit_idx'] = -1
+                    st.rerun()
+                if bc[4].button('🗑', key=f'wf_dropstg_{i}',
+                                disabled=len(draft['stages']) == 1,
+                                help='delete this stage'):
+                    draft['stages'].pop(i)
+                    st.session_state['wf_edit_idx'] = -1
+                    st.rerun()
+                if st.session_state.get('wf_edit_idx') == i:
+                    _wf_stage_editor(draft, i)
+
+            if st.button('＋ Add stage', key='wf_add_stage'):
+                draft['stages'].append(
+                    {'name': _wf_unique_stage_name(
+                        f'Stage {len(draft["stages"]) + 1}', draft),
+                     'source': 'universe'})
+                st.session_state['wf_edit_idx'] = len(draft['stages']) - 1
+                st.session_state['wf_ed_nonce'] += 1
+                st.rerun()
+
+            st.divider()
+            st.session_state.setdefault(
+                'wf_cl_edit', '\n'.join(draft.get('checklist', [])))
+            st.session_state.setdefault('wf_save_name', draft.get('name', ''))
+            st.text_area('Checklist — one item per line', key='wf_cl_edit',
+                         height=150)
+
+            sv1, sv2, sv3 = st.columns([3, 1, 1])
+            sv1.text_input('Workflow name', key='wf_save_name')
+            sv2.button('💾 Save workflow', type='primary', key='wf_save_btn',
+                       on_click=_wf_cb_save)
+            sv3.button('Discard changes', key='wf_discard',
+                       on_click=_wf_cb_discard)

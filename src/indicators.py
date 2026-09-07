@@ -168,6 +168,18 @@ def pct_from_52w_low(close: pd.DataFrame, low52: pd.DataFrame) -> pd.DataFrame:
     return (close / low52 - 1.0) * 100.0
 
 
+def pct_above_rolling_low(low: pd.DataFrame, close: pd.DataFrame,
+                          window: int) -> pd.DataFrame:
+    """(close / rolling_min(low, window) - 1) * 100 — 'price is X% above its
+    N-day low'. The Voyage Trading Group momentum-scan metric (Ollie's
+    snapshots: "Price above Low 1M / 3M / 6M by X%"; docs/workflows_tab.md).
+    Uses the intraday LOW as the floor, matching the TradingView filter.
+    Numpy-based subtraction is not needed here (single division), but the
+    rolling min is taken on `low` and divided by `close` position-wise."""
+    floor = low.rolling(window, min_periods=window).min()
+    return (close / floor - 1.0) * 100.0
+
+
 def momentum(close: pd.DataFrame) -> dict:
     """Price % gains over the dashboard windows (5d/1m/3m/6m)."""
     return {name: roc(close, n) for name, n in config.MOMENTUM_WINDOWS.items()}

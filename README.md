@@ -133,15 +133,39 @@ Every module carries per-row `as_of` dates (mixed-data transparency) and
 is covered by behavioral checks in `validate.py` /
 `test_dashboard_app.py`.
 
+## Workflows tab
+
+**🧭 Workflows** (`src/workflow.py`, `config.WORKFLOWS`, `docs/workflows_tab.md`)
+runs a saved **multi-stage screening funnel** end-to-end over the latest daily
+`screener_results.csv` — no re-run, no data load: each stage row-filters the
+previous one (or the full universe) with the *same* `dfil.build_mask` +
+`dfil.build_advanced_mask` the All-Results panel uses. Output is a **Focus
+List** (the deduped union of the stages flagged `focus_input`) plus a manual
+pre-entry checklist for the parts that need pre-market / catalyst / breadth data.
+
+- **Run view** — the stepper: per-stage `in → out` counts, filter summary,
+  rationale note, expandable table; then the Focus List (sparklines,
+  save-as-list, CSV) and the checklist.
+- **Build view** — construct/reorder/retune stages in an inline editor (the
+  same threshold grid as All Results, keyed per stage), edit the checklist,
+  **Save** to `my_workflows/*.json`. Built-ins are read-only; **Edit /
+  Duplicate** opens one as an editable copy.
+- Ships with `Trading Voyage (Ollie)` and `Trading Voyage - Daily studies
+  (Ollie)` — the Voyage Trading Group method (`sandBox/Oliver_wiedmeier/`).
+- New columns for it: `pct_above_{21,63,126}d_low` (`src/indicators.
+  pct_above_rolling_low`) — "price is X% above its N-day low", Ollie's scans.
+
 ## Validation
 
 Two re-runnable suites:
 
 ```bash
-python3 validate.py             # 10/10 data-level checks (ports vs sources,
-                                # ALL 8 presets vs manual filters, round trip)
-python3 test_dashboard_app.py   # 9/9 UI checks (Streamlit AppTest: preset
-                                # counts, leak regression, refresh, reset)
+python3 validate.py             # 41/41 data-level checks (ports vs sources,
+                                # ALL 15 presets vs manual filters, round trip,
+                                # build_advanced_mask + workflow engine)
+python3 test_dashboard_app.py   # 40/40 UI checks (Streamlit AppTest: preset
+                                # counts, leak regression, refresh, reset,
+                                # timing/patterns/confluence/workflows tabs)
 ```
 
 - ATR14 vs `metaData_v1` per-stock loop on identical window: diff 2.5e-05

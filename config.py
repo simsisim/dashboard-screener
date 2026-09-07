@@ -203,6 +203,14 @@ DASHBOARD_MA_PERIODS = {'ema10': ('ema', 10), 'ema21': ('ema', 21),
                         'sma50': ('sma', 50), 'sma200': ('sma', 200)}
 MOMENTUM_WINDOWS = {'gain_5d': 5, 'gain_1m': 21, 'gain_3m': 63, 'gain_6m': 126}
 
+# --- Voyage Trading Group momentum-scan windows (Ollie's 1M/3M/6M "% above
+# N-day low" scans; docs/workflows_tab.md §5). 21/63/126 trading days = the
+# same 5-days-per-week convention as MOMENTUM_WINDOWS / GLB. Column = close vs
+# the rolling MIN of the intraday low (matches the TradingView "Price above
+# Low" filter, which the Ollie_AllCaps screener snapshots use). ---
+ABOVE_LOW_WINDOWS = {'pct_above_21d_low': 21, 'pct_above_63d_low': 63,
+                     'pct_above_126d_low': 126}
+
 # --- focus list default gates ---
 FOCUS_STAGES = ('2A', '2B')          # early/mid uptrend only
 FOCUS_MAX_EXT = EXT_THRESHOLD_2      # exclude very_extended names
@@ -376,3 +384,131 @@ EMA20_SLOPE_LOOKBACK = 5            # EMA20 rising = today > EMA20 5 bars ago
 DOWNTREND_REVERSAL_LOOKBACK_DAYS = 6  # strictly declining daily Highs before
                                       # the reversal bar (EarningsBeats.com
                                       # Pullback Scan via more_screeners_3.md)
+
+# --- Workflows tab (docs/workflows_tab.md) --------------------------------
+# A WORKFLOW is a declarative multi-stage screening funnel. Each stage
+# narrows its `source` (the full universe, or an earlier stage by name)
+# with the SAME two mask builders the All-Results panel uses
+# (dashboard_filters.build_mask + build_advanced_mask) — no screening logic
+# is forked. The Focus List is the deduped union of the stages flagged
+# `focus_input` (or the last stage if none is). These built-ins are
+# read-only in the UI; "Duplicate" copies one into my_workflows/*.json.
+#
+# Stage shape:
+#   {'name': str,                     # unique within the workflow
+#    'source': 'universe' | <earlier stage name>,
+#    'match': 'all' | 'any',          # how to combine `selections` (default 'all')
+#    'selections': {filter_key: label | ('custom', lo, hi)},   # build_mask
+#    'advanced':   {adv_-key: value},                          # build_advanced_mask
+#    'note': str,                     # rationale, shown on the stage card
+#    'focus_input': bool}             # feeds the Focus List
+#
+# `match: 'any'` ORs the selection-grid clauses (e.g. Ollie's 1M/3M/6M
+# momentum scans, which are a union); any `advanced` block is still AND'd on
+# top of that result.
+#
+# `selections` keys are dashboard_filters.SPEC_BY_KEY names; `advanced` keys
+# are dashboard_filters.ADVANCED_DEFAULTS names. src/workflow.validate_workflow
+# and validate.py enforce this.
+WORKFLOWS = {
+    'Trading Voyage (Ollie)': {
+        'description':
+            "Oliver Wiedmaier / Voyage Trading Group weekend->focus funnel. "
+            "Universe trend filter -> 1M/3M/6M momentum leaders -> tight & "
+            "orderly consolidation -> not-extended Focus List. Gap / 10% / "
+            "20% 'studies' and every catalyst / pre-market check live in the "
+            "manual checklist. Ref: "
+            "sandBox/Oliver_wiedmeier/ollie_screening_workflow.md",
+        'stages': [
+            {'name': 'Universe', 'source': 'universe',
+             'selections': {'price': ('custom', 3.0, 1000.0),
+                            'adr': ('custom', 3.0, 60.0),
+                            'adv': '> $1M',
+                            'vs50': '> 0%', 'vs200': '> 0%'},
+             'advanced': {'adv_stages': ['2A', '2B']},
+             'note': "Ollie 'Universe' scan: price>$3, ADR%>=3, avg vol>=500k, "
+                     "close>50SMA>200SMA. (avg vol proxied by 50d ADV>$1M; "
+                     "Weinstein 2A/2B ~= the rising MA stack.)",
+             'focus_input': False},
+
+            {'name': 'Momentum leaders', 'source': 'Universe',
+             'match': 'any',
+             'selections': {'above21low': '> 30%', 'above63low': '> 50%',
+                            'above126low': '> 100%'},
+             'advanced': {},
+             'note': "Ollie's 1M/3M/6M momentum scans are a UNION (3 scans "
+                     "merged into one watchlist): >=30% above the 21d low OR "
+                     ">=50% above the 63d low OR >=100% above the 126d low. "
+                     "Min 20% momentum leg before the base.",
+             'focus_input': False},
+
+            {'name': 'Tight & orderly', 'source': 'Momentum leaders',
+             'selections': {},
+             'advanced': {'adv_rti_zone': ['1', '2'],
+                          'adv_gold_launch_pad': True},
+             'note': "RTI zone 1-2 (range tightening) + Golden Launch Pad "
+                     "(EMA 10/20/50 cluster) ~= Ollie's '2 days tight' + "
+                     "4/9/21-EMA squeeze.",
+             'focus_input': False},
+
+            {'name': 'Focus - not extended', 'source': 'Tight & orderly',
+             'selections': {}, 'advanced': {'adv_max_ext': 3.0},
+             'note': "Jack-in-the-Box ATR gate: ext <= 3 ATR vs 21 EMA AND "
+                     "<= 3 ATR vs 40 SMA (conservative single cap on both; "
+                     "Ollie's literal rule is 3 ATR / 21 EMA and 5 ATR / 50 "
+                     "SMA). Also skip names whose range today < range "
+                     "yesterday -- still compressed (manual).",
+             'focus_input': True},
+        ],
+        'checklist': [
+            "Pre-market gap >= 5% on a real catalyst (EPS surprise >= 100%, "
+            "revenue >= 30% QoQ, >= 3 analyst upgrades, M&A, product launch)",
+            "Pre-market volume >= 10% of average daily volume",
+            ">= 200% average volume by the close (HVC); bonus: HV1 / HVE",
+            "Close within the top 30% of the day's range",
+            "Short interest >= 10% (Type-2, near 52-week-low gap-ups)",
+            "Sector leadership -- name is in a leading group",
+            "Situational awareness: SPY / QQQ / IWM > 21 EMA; breadth "
+            "STRONG/MIXED; % > 200 SMA > 50; net highs > lows",
+            "Entry trigger day: range expansion > prior candle, volume > avg "
+            "at the close, close within 30% of high, 4-EMA ticking up",
+            "Stop = LOD (<= 1 ATR) or 1/2 the day's range; risk 0.25-0.5%; "
+            "total open risk <= 2% (VTG Risk Model 1)",
+        ],
+    },
+
+    'Trading Voyage - Daily studies (Ollie)': {
+        'description':
+            "The other Voyage entry point: fresh movers, run daily. Three "
+            "independent scans off the full universe (10% / 20% / high-volume "
+            "gap proxy), all feeding one Focus List. Approximations of Ollie's "
+            "'10% study' (change 10% + 200% vol), '20% study' (1-week perf "
+            "20%+) and the pre-market gap scan (no intraday data here).",
+        'stages': [
+            {'name': '10% movers', 'source': 'universe',
+             'selections': {}, 'advanced': {'adv_daily_gainers': True},
+             'note': "Stockbee 4% daily gainer (>=4% on >=1.5x rel vol) -- the "
+                     "closest always-on proxy for Ollie's 10%+200%-vol study.",
+             'focus_input': True},
+            {'name': '20% weekly', 'source': 'universe',
+             'selections': {}, 'advanced': {'adv_weekly_movers': True},
+             'note': "Stockbee 20% weekly mover = close(day5) vs open(day1) "
+                     ">= 20% -- Ollie's '20% study' (1-week performance).",
+             'focus_input': True},
+            {'name': 'Gap proxy', 'source': 'universe',
+             'selections': {'gain5': '> 10%'},
+             'advanced': {'adv_volume_anomaly': True},
+             'note': "5-day move >= 10% on a 3-sigma volume spike -- a stand-in "
+                     "for a catalyst gap-up (no pre-market feed).",
+             'focus_input': True},
+        ],
+        'checklist': [
+            "Confirm a real catalyst (earnings / analyst / FDA / M&A)",
+            "Gap >= 5% and opens above near-term resistance",
+            ">= 200% average volume by the close (HVC)",
+            "Close within the top 30% of the day's range",
+            "Not extended: within 3 ATR of the 21 EMA",
+            "Situational awareness: indices > 21 EMA; breadth not WEAK",
+        ],
+    },
+}

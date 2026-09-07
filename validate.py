@@ -89,7 +89,7 @@ import sys, json
 import pandas as pd
 sys.path.insert(0, '/home/imagda/_invest2024/python/test_scooter')
 import sctr_model
-sys.path.insert(0, '/home/imagda/_invest2024/python/screeners')
+sys.path.insert(0, '/home/imagda/_invest2024/python/dashboard-screener')
 from src import data_loader
 tickers = ['AAPL','MSFT','NVDA','JPM','XOM']
 data = data_loader.load_price_matrices(tickers, use_batch=False, verbose=False)
@@ -287,6 +287,85 @@ def main():
         counts.append(f'{pname.split(" (")[0]}={int(m_preset.sum())}')
     check(f'ALL {len(dfil.PRESETS)} presets == manual filters', not bad,
           '; '.join(bad[:3]) or ' | '.join(counts))
+
+    # 5c. Workflows tab (docs/workflows_tab.md) — build_advanced_mask
+    # extraction is a faithful no-op at defaults and matches the independent
+    # apply_advanced mirror; run_workflow chains == a single combined mask.
+    from src import workflow as wf_mod
+    _noop = dfil.build_advanced_mask(res, {})
+    check('build_advanced_mask({}) is all-True', bool(_noop.all()),
+          f'{int((~_noop).sum())} rows dropped by an empty advanced dict')
+
+    _bam_bad = []
+    for pname, p in dfil.PRESETS.items():
+        _a = {**dfil.ADVANCED_DEFAULTS, **p.get('advanced', {})}
+        m_new = dfil.build_advanced_mask(res, _a)
+        m_mirror = apply_advanced(pd.Series(True, index=res.index), _a, res)
+        if not bool((m_new == m_mirror).all()):
+            _bam_bad.append(f'{pname}: {int((m_new != m_mirror).sum())} diff')
+    check('build_advanced_mask == inline mirror (every preset advanced block)',
+          not _bam_bad, '; '.join(_bam_bad[:3]) or f'{len(dfil.PRESETS)} presets')
+
+    _w1 = {'stages': [{'name': 'A', 'source': 'universe',
+                       'selections': {'adr': '5 - 10%'}}]}
+    _r1 = wf_mod.run_workflow(res, _w1)
+    _direct = res[dfil.build_mask(res, dfil.normalize_selections(
+        {'adr': '5 - 10%'}))]
+    _w2 = {'stages': [
+        {'name': 'A', 'source': 'universe', 'selections': {'adr': '5 - 10%'}},
+        {'name': 'B', 'source': 'A', 'selections': {'vs200': '> 0%'}}]}
+    _r2 = wf_mod.run_workflow(res, _w2)
+    _combined = res[dfil.build_mask(res, dfil.normalize_selections(
+        {'adr': '5 - 10%', 'vs200': '> 0%'}))]
+    # source order-independence: two 'universe'-sourced stages yield the same
+    # rows regardless of their relative order
+    _w3a = {'stages': [
+        {'name': 'X', 'source': 'universe', 'selections': {'adr': '5 - 10%'}},
+        {'name': 'Y', 'source': 'universe', 'selections': {'vs200': '> 0%'}}]}
+    _w3b = {'stages': [
+        {'name': 'Y', 'source': 'universe', 'selections': {'vs200': '> 0%'}},
+        {'name': 'X', 'source': 'universe', 'selections': {'adr': '5 - 10%'}}]}
+    check('run_workflow: single==build_mask, chain==combined, order-independent',
+          set(_r1.focus.index) == set(_direct.index)
+          and set(_r2.focus.index) == set(_combined.index)
+          and (set(wf_mod.run_workflow(res, _w3a).by_name['X'].frame.index)
+               == set(wf_mod.run_workflow(res, _w3b).by_name['X'].frame.index)),
+          f'single={len(_r1.focus)} chain={len(_r2.focus)}/{len(_combined)}')
+
+    # match='any' ORs the selection clauses (Ollie's 1M/3M/6M scans = a union)
+    _any = {'stages': [{'name': 'A', 'source': 'universe', 'match': 'any',
+                        'selections': {'above21low': '> 30%',
+                                       'above63low': '> 50%',
+                                       'above126low': '> 100%'}}]}
+    _or_manual = ((res['pct_above_21d_low'] >= 30)
+                  | (res['pct_above_63d_low'] >= 50)
+                  | (res['pct_above_126d_low'] >= 100))
+    _and_one = {'stages': [{'name': 'A', 'source': 'universe',
+                            'selections': {'above21low': '> 30%',
+                                           'above63low': '> 50%',
+                                           'above126low': '> 100%'}}]}
+    check("run_workflow match='any' == OR of clauses (and stricter 'all')",
+          set(wf_mod.run_workflow(res, _any).focus.index)
+          == set(res.index[_or_manual.fillna(False)])
+          and len(wf_mod.run_workflow(res, _and_one).focus)
+          <= len(wf_mod.run_workflow(res, _any).focus),
+          f"any={int(_or_manual.fillna(False).sum())}")
+
+    _wfe, _mono = [], True
+    for _name, _wf in dfil.builtin_workflows().items():
+        _e = wf_mod.validate_workflow(_wf)
+        if _e:
+            _wfe.append(f'{_name}: {_e[0]}')
+        _rr = wf_mod.run_workflow(res, _wf)
+        for _s in _rr.stages:
+            if _s.n_out > _s.n_in:
+                _mono = False
+        if _rr.stages and not set(_rr.focus.index).issubset(
+                set.union(*[set(s.frame.index) for s in _rr.stages])):
+            _wfe.append(f'{_name}: focus not a subset of its stages')
+    check('builtin workflows valid + monotonic + focus ⊆ stages',
+          _mono and not _wfe,
+          '; '.join(_wfe[:3]) or f'{len(dfil.builtin_workflows())} workflows')
 
     # 5b. CANTATA / CE — score bounds + composition + two CEF items
     # reconstructed straight from the financial snapshot

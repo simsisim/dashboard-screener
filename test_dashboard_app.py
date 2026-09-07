@@ -430,6 +430,64 @@ def main():
           str(saved))
     saved.unlink(missing_ok=True)
 
+    # ---- 8. Workflows tab (docs/workflows_tab.md) ------------------------
+    from src import workflow as wf_mod
+    at8 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at8.run()
+    check('workflows tab: boot 0 exceptions', len(at8.exception) == 0,
+          at8.exception[0].message[:120] if at8.exception else '')
+
+    # run view: selecting the built-in and letting it run shows the stepper
+    # + a Focus List whose size == the engine's own answer
+    run = _latest_run_dir()
+    _res = pd.read_csv(run / 'screener_results.csv', index_col='ticker')
+    _wf = dfil.load_workflow('Trading Voyage (Ollie)')
+    _eng_focus = len(wf_mod.run_workflow(_res, _wf).focus)
+    ui_focus = None
+    for c in at8.subheader:
+        m = re.search(r'Focus List — ([\d,]+) names', str(c.value))
+        if m:
+            ui_focus = int(m.group(1).replace(',', ''))
+    check('workflows tab: run view Focus List == engine',
+          ui_focus == _eng_focus, f'ui={ui_focus} engine={_eng_focus}')
+
+    # build view: Edit/Duplicate -> a draft appears, Save writes my_workflows/
+    for r in at8.radio:
+        if r.key == 'wf_mode':
+            r.set_value('✎ Build view').run()
+    for b in at8.button:
+        if b.key == 'wf_edit_btn':
+            b.click().run()
+    has_save = any(b.key == 'wf_save_btn' for b in at8.button)
+    check('workflows tab: Edit opens a build-view draft', has_save,
+          f'draft={ss(at8.session_state, "wf_draft") is not None}')
+
+    # open the stage-2 editor (the st.form with the grid + Match radio)
+    for b in at8.button:
+        if b.key == 'wf_edit_1':
+            b.click().run()
+    n = ss(at8.session_state, 'wf_ed_nonce', 0)
+    has_match = any(r.key == f'wfe{n}_match' for r in at8.radio)
+    check('workflows tab: stage editor renders (grid + Match radio)',
+          has_match and len(at8.exception) == 0,
+          at8.exception[0].message[:120] if at8.exception else f'nonce={n}')
+    _wf_test = dfil.MY_WORKFLOWS / 'wf_apptest.json'
+    _wf_test.unlink(missing_ok=True)
+    for ti in at8.text_input:
+        if ti.key == 'wf_save_name':
+            ti.set_value('wf_apptest').run()
+    for b in at8.button:
+        if b.key == 'wf_save_btn':
+            b.click().run()
+    check('workflows tab: Save writes my_workflows/*.json', _wf_test.exists(),
+          str(_wf_test))
+    if _wf_test.exists():
+        _rt = dfil.load_workflow('wf_apptest')
+        check('workflows tab: saved workflow round-trips + runs',
+              _rt is not None and not wf_mod.validate_workflow(_rt),
+              f'stages={len(_rt["stages"]) if _rt else 0}')
+    _wf_test.unlink(missing_ok=True)
+
     print()
     ok_all = True
     for status, name, detail in results:

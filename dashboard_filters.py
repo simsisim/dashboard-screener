@@ -16,13 +16,18 @@ A selection value is either:
   - ('custom', lo, hi)  — from the revealed slider
 """
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+import config  # noqa: E402  (leaf module — WORKFLOWS built-ins for workflow_store)
+
 MY_SCREENERS = ROOT / 'my_screeners'
 MY_LISTS = ROOT / 'my_lists'
+MY_WORKFLOWS = ROOT / 'my_workflows'
 
 # ---------------------------------------------------------------- families --
 def _vs_ma(lo=None, hi=None):
@@ -88,6 +93,12 @@ THRESHOLD_FAMILIES = {
     'adx': [('All', None), ('> 20 (trending)', (20, None)),
             ('> 25', (25, None)), ('> 30 (strong)', (30, None)),
             ('< 20 (range)', (None, 20))],
+    # Voyage Trading Group momentum scans — "price is X% above its N-day low"
+    # (Workflows tab; Ollie's 1M/3M/6M snapshots). Column: pct_above_{21,63,
+    # 126}d_low from src/indicators.pct_above_rolling_low.
+    'above_low': [('All', None), ('> 20%', (20, None)), ('> 30%', (30, None)),
+                  ('> 50%', (50, None)), ('> 100%', (100, None)),
+                  ('> 200%', (200, None))],
 }
 
 # slider bounds per family (for the "Custom…" reveal)
@@ -98,6 +109,7 @@ CUSTOM_RANGE = {
     'price': (0.0, 1000.0, 1.0), 'mktcap': (0.0, 200e9, 0.5e9),
     'vroc': (-200.0, 500.0, 5.0), 'mfi': (0.0, 100.0, 1.0),
     'adx': (0.0, 60.0, 1.0), 'rsi': (0.0, 100.0, 1.0),
+    'above_low': (0.0, 500.0, 5.0),
 }
 
 # ----------------------------------------------------------------- filters --
@@ -115,6 +127,10 @@ FILTER_SPECS = [
     ('gain3m', 'Price 3m %Gain', 'gain_3m', 'gain'),
     ('gain6m', 'Price 6m %Gain', 'gain_6m', 'gain'),
     ('adr', '20d ADR %', 'adr20_pct', 'adr'),
+    # Voyage Trading Group momentum scans (Workflows tab)
+    ('above21low', '% above 21d low', 'pct_above_21d_low', 'above_low'),
+    ('above63low', '% above 63d low', 'pct_above_63d_low', 'above_low'),
+    ('above126low', '% above 126d low', 'pct_above_126d_low', 'above_low'),
     ('avgvol', '50d Av. Volume', 'avg_volume50', 'volume'),
     ('adv', '50d Av. Dollar Volume (ADV)', 'adv50_dollar', 'adv_dollar'),
     ('rsi14', 'RSI 14', 'rsi14', 'rsi'),
@@ -135,19 +151,29 @@ DEFAULT_SELECTION = {k: 'All' for k in SPEC_BY_KEY}
 
 
 def selection_to_range(value, family):
-    """Selection -> (lo, hi) floats (None = open end), or None for 'All'."""
+    """Selection -> (lo, hi) floats (None = open end), or None for 'All'.
+    A 'custom' range is a tuple in live UI code but a list after a JSON round
+    trip (saved screeners, config.WORKFLOWS built-ins) — accept both."""
     if value is None or value == 'All':
         return None
-    if isinstance(value, tuple) and value and value[0] == 'custom':
+    if isinstance(value, (tuple, list)) and value and value[0] == 'custom':
         return (float(value[1]), float(value[2]))
     opts = dict(THRESHOLD_FAMILIES[family])
     return opts.get(value)
 
 
-def build_mask(df: pd.DataFrame, selections: dict) -> pd.Series:
-    """Apply the 14 sketch-filter selections to a results DataFrame.
-    NaN never passes a one-sided threshold (notna() is required)."""
-    mask = pd.Series(True, index=df.index)
+def build_mask(df: pd.DataFrame, selections: dict,
+               match: str = 'all') -> pd.Series:
+    """Apply the sketch-filter selections to a results DataFrame.
+    NaN never passes a one-sided threshold (notna() is required).
+
+    `match='all'` (default, and the only mode the All-Results panel uses)
+    ANDs the active clauses; `match='any'` ORs them — a Workflows-tab stage
+    can set it so one stage expresses e.g. Ollie's 1M/3M/6M momentum scans,
+    which are a union. 'All'-valued selections are ignored in both modes; an
+    empty / all-'All' stage yields all-True regardless of `match`.
+    """
+    clauses = []
     for key, value in selections.items():
         _label, col, fam = SPEC_BY_KEY[key]
         rng = selection_to_range(value, fam)
@@ -155,10 +181,85 @@ def build_mask(df: pd.DataFrame, selections: dict) -> pd.Series:
             continue
         lo, hi = rng
         s = df[col]
+        c = pd.Series(True, index=df.index)
         if lo is not None:
-            mask &= s.notna() & (s >= lo)
+            c &= s.notna() & (s >= lo)
         if hi is not None:
-            mask &= s.notna() & (s <= hi)
+            c &= s.notna() & (s <= hi)
+        clauses.append(c)
+    if not clauses:
+        return pd.Series(True, index=df.index)
+    out = clauses[0].copy()
+    for c in clauses[1:]:
+        if match == 'any':
+            out |= c
+        else:
+            out &= c
+    return out
+
+
+# ------------------------------------------------------- advanced mask -----
+# adv_<flag> checkboxes whose mask IS the boolean `in_<flag[4:]>` column.
+ADVANCED_FLAG_KEYS = (
+    'adv_9m_movers', 'adv_weekly_movers', 'adv_daily_gainers',
+    'adv_gold_launch_pad', 'adv_qullamaggie', 'adv_volume_anomaly',
+    'adv_adl_accumulation', 'adv_52w_high_breakout', 'adv_52w_low_breakdown',
+    'adv_ema20_pullback', 'adv_downtrend_reversal', 'adv_cantata',
+)
+
+
+def build_advanced_mask(df: pd.DataFrame, advanced: dict,
+                        idx_map: dict | None = None) -> pd.Series:
+    """The All-Results 'Advanced' panel (+ sector / industry) as a pure
+    boolean mask — extracted verbatim from dashboard.py so the Workflows
+    engine (src/workflow.py) reuses the SAME logic instead of forking it.
+
+    `advanced` holds the adv_-prefixed keys from ADVANCED_DEFAULTS plus
+    sel_sector / sel_industry; any missing key falls back to the no-op
+    default. `idx_map` (ticker -> frozenset of index names, from
+    on_demand.universe_index_map()) is consulted only when adv_index is set.
+    """
+    a = {**ADVANCED_DEFAULTS, **(advanced or {})}
+    mask = pd.Series(True, index=df.index)
+    if a['sel_sector']:
+        mask &= df['sector'].isin(a['sel_sector'])
+    if a['sel_industry']:
+        mask &= df['industry'].isin(a['sel_industry'])
+    if a['adv_leaders']:
+        cols = [f'in_{s}' for s in a['adv_leaders']]
+        if all(c in df.columns for c in cols):
+            flags = df[cols].fillna(False).astype(bool)
+            mask &= (flags.any(axis=1)
+                     if a['adv_leaders_mode'].startswith('Any')
+                     else flags.all(axis=1))
+    if a['adv_stages']:
+        mask &= df['stage'].isin(a['adv_stages'])
+    if a['adv_max_ext'] < 10.0:
+        mask &= (df['ext_21ema_atr'].fillna(99) <= a['adv_max_ext']) & \
+                (df['ext_40sma_atr'].fillna(99) <= a['adv_max_ext'])
+    mask &= df['rs_pct'].fillna(0) >= a['adv_min_rs']
+    if 'minervini_count' in df.columns:
+        mask &= df['minervini_count'].fillna(0) >= a['adv_min_count']
+    if a['adv_rti_zone']:
+        mask &= df['rti_zone'].isin(a['adv_rti_zone'])
+    if a['adv_rti_dots']:
+        mask &= df['rti_dots'].fillna(False).astype(bool)
+    if a['adv_rti_exp']:
+        mask &= df['rti_expansion'].fillna(False).astype(bool)
+    for _flag in ADVANCED_FLAG_KEYS:
+        if a.get(_flag):
+            mask &= df[f'in_{_flag[4:]}'].fillna(False).astype(bool)
+    if a.get('adv_ce_min', 0.0) > 0 and 'ce_score' in df.columns:
+        mask &= df['ce_score'].fillna(0) >= a['adv_ce_min']
+    if a.get('adv_gmma_state'):
+        mask &= df['gmma_state'].isin(a['adv_gmma_state'])
+    if a['adv_exchange']:
+        mask &= df['exchange'].isin(a['adv_exchange']).fillna(False)
+    if a['adv_index'] and idx_map is not None:
+        _sel = set(a['adv_index'])
+        mask &= pd.Series(df.index.map(
+            lambda t: bool(idx_map.get(str(t).upper(), frozenset()) & _sel)),
+            index=df.index)
     return mask
 
 
@@ -353,6 +454,58 @@ def saved_lists() -> list:
     if not MY_LISTS.exists():
         return []
     return sorted(p.stem for p in MY_LISTS.glob('*.csv'))
+
+
+# ---------------------------------------------------- workflow store -------
+# Built-ins (config.WORKFLOWS) are read-only; user copies are JSON in
+# my_workflows/. Same pattern as save_screener / saved_screeners / ...
+# (docs/workflows_tab.md §6).
+def builtin_workflows() -> dict:
+    """name -> workflow dict, from config.WORKFLOWS (deep-copied, read-only)."""
+    return json.loads(json.dumps(getattr(config, 'WORKFLOWS', {})))
+
+
+def is_builtin_workflow(name: str) -> bool:
+    return name in getattr(config, 'WORKFLOWS', {})
+
+
+def saved_workflows() -> list:
+    if not MY_WORKFLOWS.exists():
+        return []
+    return sorted(p.stem for p in MY_WORKFLOWS.glob('*.json'))
+
+
+def load_workflow(name: str) -> dict | None:
+    """Built-in first (read-only copy), then my_workflows/<safe>.json."""
+    bi = getattr(config, 'WORKFLOWS', {})
+    if name in bi:
+        wf = json.loads(json.dumps(bi[name]))
+        wf['name'] = name
+        return wf
+    path = MY_WORKFLOWS / f'{_safe(name)}.json'
+    if path.exists():
+        wf = json.loads(path.read_text())
+        wf.setdefault('name', name)
+        return wf
+    return None
+
+
+def save_workflow(name: str, wf: dict) -> Path:
+    MY_WORKFLOWS.mkdir(exist_ok=True)
+    payload = dict(wf)
+    payload['name'] = name
+    path = MY_WORKFLOWS / f'{_safe(name)}.json'
+    path.write_text(json.dumps(payload, indent=2))
+    return path
+
+
+def delete_workflow(name: str) -> bool:
+    """my_workflows/ only — built-ins can't be deleted."""
+    path = MY_WORKFLOWS / f'{_safe(name)}.json'
+    if path.exists():
+        path.unlink()
+        return True
+    return False
 
 
 def _safe(name: str) -> str:

@@ -103,6 +103,11 @@ def main(argv=None):
     ctx['pct_from_52w_low'] = indicators.pct_from_52w_low(close, low52).iloc[-1].round(2)
     for name, series in mom.items():
         ctx[name] = series.iloc[-1].round(2)
+    # Voyage Trading Group momentum-scan columns — "% above the N-day low"
+    # (Workflows tab / docs/workflows_tab.md §5)
+    for col, window in config.ABOVE_LOW_WINDOWS.items():
+        ctx[col] = indicators.pct_above_rolling_low(
+            data['low'], close, window).iloc[-1].round(2)
     ctx['rs_pct'] = rs_pct.round(1)
 
     # more_screeners_3.md items (feedback_7.md): RSI filter column +
