@@ -138,6 +138,35 @@ st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md 
      '🎖️ Confluence', '🕐 Timing Signals', '🌊 Patterns', '🧭 Workflows',
      '📋 Ticker detail'])
 
+# Streamlit 1.47's st.tabs can't remember the selected tab: every rerun
+# (any widget click) snaps back to the first one. Remember the clicked tab in
+# sessionStorage and re-click it whenever the DOM shows a different one.
+import streamlit.components.v1 as _components  # noqa: E402
+_components.html("""<script>
+(function () {
+  var P = window.parent, D = P.document;
+  if (P.__tabKeeper) return;
+  P.__tabKeeper = true;
+  var KEY = 'dashboard_active_tab';
+  function tabs() {
+    return D.querySelectorAll('[data-baseweb="tab-list"] button[role="tab"]');
+  }
+  D.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button[role="tab"]');
+    if (!b) return;
+    var i = Array.prototype.indexOf.call(tabs(), b);
+    if (i >= 0) P.sessionStorage.setItem(KEY, String(i));
+  }, true);
+  function restore() {
+    var i = P.sessionStorage.getItem(KEY), t = tabs();
+    if (i === null || !t[i]) return;
+    if (t[i].getAttribute('aria-selected') !== 'true') t[i].click();
+  }
+  new MutationObserver(restore).observe(D.body, {childList: true, subtree: true});
+  restore();
+})();
+</script>""", height=0)
+
 # ------------------------------------------ All Results (sketch layout) --
 import dashboard_filters as dfil  # noqa: E402
 
