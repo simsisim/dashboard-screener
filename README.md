@@ -97,8 +97,12 @@ Lists** (CSV upload) / **My Screener** (saved filter panels, load + delete) /
 dropdowns + Custom… sliders; Reset / Save Screener / Save Screener As…
 (JSON in `my_screeners/`); results section with Search, Number of Results,
 Order Results by, Sort Order, "Showing 1 to N of M", per-row selection with
-**sparkline chart column** (120d closes), save-selected/all-as-list and CSV
-download. Advanced filters (stage, RS, RTI, leaders
+**sparkline chart column** (120d closes), save-selected/all-as-list, CSV
+download, and a **TradingView `.txt`** export (`EXCHANGE:SYMBOL`,
+comma-separated, `###` section divider — paste into TradingView's *Upload
+list…*; `dfil.tradingview_watchlist()`, offered on every results table:
+All Results, Focus List, Leaders, Confluence, Timing, Patterns, Workflows).
+Advanced filters (stage, RS, RTI, leaders
 union/intersection, exchange, index) in a collapsible section. The
 **Re-run screeners** button executes `run_screeners.py` from the UI.
 

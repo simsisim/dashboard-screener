@@ -166,6 +166,8 @@ def load_shares_outstanding(symbol: str) -> pd.Series | None:
     for stem in _file_candidates(symbol):
         p = config.MARKET_DATA_SHARES / f'{stem}.csv'
         if p.exists():
-            df = pd.read_csv(p, parse_dates=['Date'])
+            df = pd.read_csv(p)
+            # files mix 'YYYY-MM-DD' and 'YYYY-MM-DD HH:MM:SS' rows
+            df['Date'] = pd.to_datetime(df['Date'], format='mixed')
             return df.set_index('Date')['SharesOutstanding'].sort_index()
     return None

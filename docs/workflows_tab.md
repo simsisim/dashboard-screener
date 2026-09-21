@@ -280,7 +280,7 @@ unlocks it.
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                                                            │
 │ ═════════════════════════════════════════════════════════════════════════  │
-│ 📋 FOCUS LIST · 7 names        [💾 Save as list…]  [⭳ CSV]  [→ All Results] │
+│ 📋 FOCUS LIST · 7 names   [💾 Save as list…] [⭳ CSV] [⭳ TW .txt] [→ All Res] │
 │ ┌────────┬───────┬──────┬───────┬──────┬──────────┬───────────────────────┐ │
 │ │ ticker │ spark │ ADR% │ RTI z │ ext  │ %>63d lo │ 1m / 3m / 6m gain     │ │
 │ ├────────┼───────┼──────┼───────┼──────┼──────────┼───────────────────────┤ │
@@ -308,6 +308,17 @@ unlocks it.
 - **Focus-list actions reuse existing plumbing:** `dfil.save_list()`, the CSV
   download, and `→ All Results` writes the tickers into
   `st.session_state` as an applied list and switches tab.
+- **`⭳ TradingView .txt`** — `dfil.tradingview_watchlist(frame, section=…)`
+  emits the format TradingView's *Upload list…* accepts: `EXCHANGE:SYMBOL`
+  tokens, comma-separated, with a leading `###<name>` section divider. The
+  exchange prefix comes from the `exchange` column of `screener_results.csv`
+  (`NYSE Arca` → `AMEX`, unknown → bare symbol, which TradingView resolves for
+  unambiguous US equities). Same button on every stage's *show table* expander
+  (alongside a per-stage `⭳ CSV`), and on every other results table in the
+  dashboard (All Results, Focus List, Leaders, Confluence, Timing, Patterns) via
+  the shared `dashboard._tv_txt()` wrapper. TradingView caps an imported list at
+  1000 symbols — split larger exports by hand.
+  Ref: <https://www.tradingview.com/support/solutions/43000487233>.
 
 ---
 

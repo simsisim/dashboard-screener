@@ -452,12 +452,11 @@ WORKFLOWS = {
              'focus_input': False},
 
             {'name': 'Focus - not extended', 'source': 'Tight & orderly',
-             'selections': {}, 'advanced': {'adv_max_ext': 3.0},
-             'note': "Jack-in-the-Box ATR gate: ext <= 3 ATR vs 21 EMA AND "
-                     "<= 3 ATR vs 40 SMA (conservative single cap on both; "
-                     "Ollie's literal rule is 3 ATR / 21 EMA and 5 ATR / 50 "
-                     "SMA). Also skip names whose range today < range "
-                     "yesterday -- still compressed (manual).",
+             'selections': {}, 'advanced': {'adv_max_ext21': 3.0, 'adv_max_ext50': 5.0},
+             'note': "Jack-in-the-Box ATR gate, Ollie's literal rule: <= 3 ATR "
+                     "above the 21 EMA AND <= 5 ATR above the 50 SMA. Also "
+                     "skip names whose range today < range yesterday -- "
+                     "still compressed (manual).",
              'focus_input': True},
         ],
         'checklist': [

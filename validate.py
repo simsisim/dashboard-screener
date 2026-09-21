@@ -367,6 +367,21 @@ def main():
           _mono and not _wfe,
           '; '.join(_wfe[:3]) or f'{len(dfil.builtin_workflows())} workflows')
 
+    # 5a-bis. TradingView watchlist export — EXCHANGE:SYMBOL, comma separated,
+    # ###header divider, dedup; unknown exchange -> bare symbol.
+    _tv = dfil.tradingview_watchlist(
+        pd.DataFrame({'exchange': ['NASDAQ', 'NYSE', 'NYSE Arca', None]},
+                     index=['AAPL', 'BRK.A', 'SEB', 'AAPL']),
+        section='wl')
+    _tv_frame = dfil.tradingview_watchlist(res.head(50))
+    check('tradingview_watchlist: prefix + sections + dedup + df frame',
+          _tv == '###wl,NASDAQ:AAPL,NYSE:BRK.A,AMEX:SEB\n'
+          and _tv_frame.endswith('\n') and ',' in _tv_frame
+          and all(':' not in tok
+                  or tok.split(':')[0] in dfil.TV_EXCHANGE_MAP.values()
+                  for tok in _tv_frame.strip().split(',')),
+          _tv.strip())
+
     # 5b. CANTATA / CE — score bounds + composition + two CEF items
     # reconstructed straight from the financial snapshot
     cta_bad = []

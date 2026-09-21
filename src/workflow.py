@@ -149,6 +149,10 @@ def stage_summary(stage: dict) -> str:
         parts.append(f"RTI zone {','.join(adv['adv_rti_zone'])}")
     if adv.get('adv_max_ext', 10.0) < 10.0:
         parts.append(f"ext <= {adv['adv_max_ext']:g} ATR")
+    if adv.get('adv_max_ext21', 10.0) < 10.0:
+        parts.append(f"ext21 <= {adv['adv_max_ext21']:g} ATR")
+    if adv.get('adv_max_ext50', 10.0) < 10.0:
+        parts.append(f"ext50 <= {adv['adv_max_ext50']:g} ATR")
     if adv.get('adv_min_rs', 0.0) > 0:
         parts.append(f"RS >= {adv['adv_min_rs']:g}")
     if adv.get('adv_gmma_state'):

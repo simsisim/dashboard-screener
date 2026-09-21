@@ -142,6 +142,22 @@ st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md 
 import dashboard_filters as dfil  # noqa: E402
 
 
+def _tv_txt(frame, section: str) -> bytes:
+    """`frame` (indexed by ticker) -> TradingView “Upload list…” .txt bytes:
+    EXCHANGE:SYMBOL, comma-separated, leading ###section divider. The exchange
+    prefix comes from the frame's own `exchange` column when present, else from
+    the master `full` table (unknown -> bare symbol). Split by hand above the
+    TradingView 1000-symbol import cap."""
+    ex = None
+    if 'exchange' not in getattr(frame, 'columns', []):
+        ex = full['exchange'].reindex(frame.index).to_dict()
+    return dfil.tradingview_watchlist(frame, exchanges=ex, section=section).encode()
+
+
+_TV_HELP = ('EXCHANGE:SYMBOL, comma-separated — paste-ready for TradingView '
+            '“Upload list…”. Split by hand if over 1000 names.')
+
+
 def _init_filter_state():
     for k in dfil.SPEC_BY_KEY:
         st.session_state.setdefault(f'sel_{k}', 'All')
@@ -371,12 +387,17 @@ with tab_all:
         a4.multiselect('RTI zone', ['1', '2', '3'], key='adv_rti_zone',
                        help='empty = all zones')
         a5, a6, a7, a8 = st.columns(4)
-        a5.slider('max ext (ATR, both MAs)', -5.0, 10.0, key='adv_max_ext', step=0.5,
+        a5.slider('max ext (ATR, 21EMA & 40SMA)', -5.0, 10.0, key='adv_max_ext', step=0.5,
                   help='10.0 = off')
         a6.slider('RS % ≥', 0.0, 100.0, key='adv_min_rs', step=1.0)
         a7.slider('Minervini count ≥', 0, 8, key='adv_min_count')
         a8.multiselect('Exchange', sorted(full['exchange'].dropna().unique()),
                        key='adv_exchange')
+        a9x, a9y, _a9z, _a9w = st.columns(4)
+        a9x.slider('max ext vs 21 EMA (ATR)', -5.0, 10.0, key='adv_max_ext21',
+                   step=0.5, help='Ollie: 3. 10.0 = off')
+        a9y.slider('max ext vs 50 SMA (ATR)', -5.0, 10.0, key='adv_max_ext50',
+                   step=0.5, help='Ollie: 5. 10.0 = off')
         a9, a10, a11, a12 = st.columns(4)
         a9.multiselect('Index membership', index_choices(), key='adv_index')
         a10.checkbox('RTI low-vol dots', key='adv_rti_dots')
@@ -442,7 +463,8 @@ with tab_all:
         mask &= pd.Series(full.index.isin(upload_syms) | full.index.isin(_variants),
                           index=full.index)
     view_cols = ['close', 'scooter_score', 'rs_pct', 'minervini_count', 'stage',
-                 'ext_21ema_atr', 'ext_40sma_atr', 'adr20_pct', 'rti', 'rti_zone',
+                 'ext_21ema_atr', 'ext_40sma_atr', 'ext_50sma_atr', 'adr20_pct', 'rti',
+                 'rti_zone',
                  'rti_dots', 'rti_expansion', 'rel_volume_today', 'daily_gain_pct',
                  'weekly_gain_pct', 'in_9m_movers', 'in_weekly_movers',
                  'in_daily_gainers', 'glp_spread', 'glp_spread_score',
@@ -543,10 +565,19 @@ with tab_all:
     d1.download_button('Download CSV (all results)',
                        result.round(3).to_csv().encode(),
                        file_name=f'filtered_{run.name}.csv')
+    d1.download_button('⭳ TradingView .txt (all)',
+                       _tv_txt(result, f'Filtered — {run.name}'),
+                       file_name=f'filtered_{run.name}.txt',
+                       mime='text/plain', help=_TV_HELP)
     if selected_tickers:
         d1.download_button('Download CSV (selected)',
                            result.loc[selected_tickers].round(3).to_csv().encode(),
                            file_name=f'selected_{run.name}.csv')
+        d1.download_button('⭳ TradingView .txt (selected)',
+                           _tv_txt(result.loc[selected_tickers],
+                                   f'Selected — {run.name}'),
+                           file_name=f'selected_{run.name}.txt',
+                           mime='text/plain', help=_TV_HELP)
     list_name = d2.text_input('List name', key='save_list_name',
                               placeholder='list name…')
     save_selected = d2.button('Save SELECTED as list',
@@ -572,9 +603,15 @@ with tab_leaders:
                          expanded=(name == 'all')):
             if df is not None and len(df):
                 st.dataframe(df.round(2), use_container_width=True, height=360)
-                st.download_button(f'Download leaders_{name}.csv',
-                                   df.round(3).to_csv().encode(),
-                                   file_name=f'leaders_{name}_{run.name}.csv')
+                lc1, lc2, _lc3 = st.columns([1, 1, 2])
+                lc1.download_button(f'Download leaders_{name}.csv',
+                                    df.round(3).to_csv().encode(),
+                                    file_name=f'leaders_{name}_{run.name}.csv')
+                lc2.download_button(
+                    '⭳ TradingView .txt',
+                    _tv_txt(df, f'Leaders · {label}'),
+                    file_name=f'leaders_{name}_{run.name}.txt',
+                    mime='text/plain', key=f'lead_tv_{name}', help=_TV_HELP)
 
 # ------------------------------------------------------------- focus ------
 with tab_focus:
@@ -582,9 +619,14 @@ with tab_focus:
                 f"not very-extended ∩ liquid. Sorted by SCOOTER.")
     if len(focus):
         st.dataframe(focus.round(2), use_container_width=True, height=520)
-        st.download_button('Download focus_list.csv',
-                           focus.round(3).to_csv().encode(),
-                           file_name=f'focus_list_{run.name}.csv')
+        fc1, fc2, _fc3 = st.columns([1, 1, 2])
+        fc1.download_button('Download focus_list.csv',
+                            focus.round(3).to_csv().encode(),
+                            file_name=f'focus_list_{run.name}.csv')
+        fc2.download_button('⭳ TradingView .txt',
+                            _tv_txt(focus, f'Focus List — {run.name}'),
+                            file_name=f'focus_list_{run.name}.txt',
+                            mime='text/plain', help=_TV_HELP)
     else:
         st.info('Empty focus list in this run.')
 
@@ -766,6 +808,11 @@ with tab_confluence:
             'Download CSV (ranked)',
             cf_df[tbl_cols + ['badges', 'families']].round(3).to_csv().encode(),
             file_name=f'confluence_{run.name}.csv')
+        e1.download_button(
+            '⭳ TradingView .txt',
+            _tv_txt(cf_df, f'Confluence — {run.name}'),
+            file_name=f'confluence_{run.name}.txt',
+            mime='text/plain', help=_TV_HELP)
         cf_ln = e2.text_input('List name', key='cf_list_name',
                               placeholder='list name…')
         cf_save_sel = e2.button('Save SELECTED as list', key='cf_save_sel',
@@ -1027,6 +1074,10 @@ with tab_timing:
         d1, d2, _d3 = st.columns([1, 1, 3])
         d1.download_button('Download CSV', view.to_csv().encode(),
                            file_name=f'timing_signals_{ts_key}_{run.name}.csv')
+        d1.download_button('⭳ TradingView .txt',
+                           _tv_txt(view, f'Timing · {ts_key}'),
+                           file_name=f'timing_signals_{ts_key}_{run.name}.txt',
+                           mime='text/plain', help=_TV_HELP)
         ln = d2.text_input('List name', key='ts_list_name',
                            placeholder='list name…')
         if d2.button('Save as list', key='ts_save_list',
@@ -1279,6 +1330,12 @@ with tab_patterns:
         d1, d2, _d3 = st.columns([1, 1, 3])
         d1.download_button('Download CSV', pt_results.to_csv().encode(),
                            file_name=f'patterns_{pt_file_key}_{run.name}.csv')
+        if len(show_pt):
+            d1.download_button(
+                '⭳ TradingView .txt (signals)',
+                _tv_txt(show_pt, f'Patterns · {pt_file_key}'),
+                file_name=f'patterns_{pt_file_key}_{run.name}.txt',
+                mime='text/plain', help=_TV_HELP)
         ln = d2.text_input('List name', key='pt_list_name',
                            placeholder='list name…')
         if d2.button('Save as list', key='pt_save_list',
@@ -1324,7 +1381,7 @@ def _wf_md(txt) -> str:
 
 
 WF_STEP_COLS = ['close', 'adr20_pct', 'rti_zone', 'ext_21ema_atr',
-                'ext_40sma_atr', 'pct_above_63d_low', 'gain_1m', 'gain_3m',
+                'ext_40sma_atr', 'ext_50sma_atr', 'pct_above_63d_low', 'gain_1m', 'gain_3m',
                 'gain_6m', 'rs_pct', 'stage', 'sector']
 WF_EDITOR_FLAGS = {
     'adv_gold_launch_pad': 'Golden Launch Pad',
@@ -1338,7 +1395,8 @@ WF_EDITOR_FLAGS = {
     'adv_rti_dots': 'RTI low-vol dots',
 }
 _WF_EXPOSED_ADV = ({'adv_leaders', 'adv_leaders_mode', 'adv_stages',
-                    'adv_rti_zone', 'adv_max_ext'} | set(WF_EDITOR_FLAGS))
+                    'adv_rti_zone', 'adv_max_ext', 'adv_max_ext21',
+                    'adv_max_ext50'} | set(WF_EDITOR_FLAGS))
 
 
 def _wf_unique_stage_name(base: str, draft: dict) -> str:
@@ -1430,9 +1488,16 @@ def _wf_stage_editor(draft: dict, i: int):
                 'RTI zone', ['1', '2', '3'],
                 default=adv0.get('adv_rti_zone', []), key=f'wfe{n}_rti')
             a_ext = st.slider(
-                'max ext (ATR, both MAs; 10 = off)', -5.0, 10.0,
+                'max ext (ATR, 21EMA & 40SMA; 10 = off)', -5.0, 10.0,
                 value=float(adv0.get('adv_max_ext', 10.0)), step=0.5,
                 key=f'wfe{n}_ext')
+            e1, e2 = st.columns(2)
+            a_ext21 = e1.slider('max ext vs 21 EMA (ATR; 10 = off)', -5.0, 10.0,
+                                value=float(adv0.get('adv_max_ext21', 10.0)),
+                                step=0.5, key=f'wfe{n}_ext21')
+            a_ext50 = e2.slider('max ext vs 50 SMA (ATR; 10 = off)', -5.0, 10.0,
+                                value=float(adv0.get('adv_max_ext50', 10.0)),
+                                step=0.5, key=f'wfe{n}_ext50')
             fcols = st.columns(3)
             a_flags = {}
             for k, (fk, fl) in enumerate(WF_EDITOR_FLAGS.items()):
@@ -1462,6 +1527,10 @@ def _wf_stage_editor(draft: dict, i: int):
             new_adv['adv_rti_zone'] = a_rti
         if a_ext < 10.0:
             new_adv['adv_max_ext'] = a_ext
+        if a_ext21 < 10.0:
+            new_adv['adv_max_ext21'] = a_ext21
+        if a_ext50 < 10.0:
+            new_adv['adv_max_ext50'] = a_ext50
         for fk, v in a_flags.items():
             if v:
                 new_adv[fk] = True
@@ -1613,6 +1682,19 @@ with tab_workflows:
                                      use_container_width=True,
                                      height=min(90 + 32 * max(1, len(sr.frame)),
                                                 420))
+                        if sr.n_out:
+                            _stem = dfil._safe(f'{wf_sel}_{sr.name}')
+                            sc1, sc2, _sc3 = st.columns([1, 1, 2])
+                            sc1.download_button(
+                                '⭳ CSV', sr.frame.round(3).to_csv().encode(),
+                                file_name=f'{_stem}_{run.name}.csv',
+                                key=f'wf_stage_csv_{i}')
+                            sc2.download_button(
+                                '⭳ TradingView .txt',
+                                _tv_txt(sr.frame, f'{wf_sel} · {sr.name}'),
+                                file_name=f'{_stem}_{run.name}.txt',
+                                mime='text/plain', key=f'wf_stage_tv_{i}',
+                                help=_TV_HELP)
 
             st.subheader(f'📋 Focus List — {len(res.focus):,} names')
             if len(res.focus):
@@ -1631,6 +1713,11 @@ with tab_workflows:
                     'Download CSV', res.focus.round(3).to_csv().encode(),
                     file_name=f'workflow_focus_{run.name}.csv',
                     key='wf_focus_csv')
+                fa1.download_button(
+                    '⭳ TradingView .txt',
+                    _tv_txt(res.focus, f'{wf_sel} — Focus'),
+                    file_name=f'{dfil._safe(wf_sel)}_focus_{run.name}.txt',
+                    mime='text/plain', key='wf_focus_tv', help=_TV_HELP)
                 _ln = fa2.text_input('List name', key='wf_focus_ln',
                                      placeholder='list name…')
                 if fa2.button('Save as list', key='wf_focus_save',

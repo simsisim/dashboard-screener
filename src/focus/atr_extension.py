@@ -35,6 +35,7 @@ def evaluate(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame,
     atr_p = indicators.atr_pct(close, atr)
     ema21 = indicators.ema(close, config.EXT_EMA_PERIOD)
     sma40 = indicators.sma(close, config.EXT_SMA_PERIOD)
+    sma50 = indicators.sma(close, 50)          # Trading Voyage (Ollie) rule
 
     last_c = close.iloc[-1]
     last_atr = atr.iloc[-1]
@@ -47,10 +48,14 @@ def evaluate(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame,
     out['atr_pct'] = last_atr_pct.round(2)
     out['ema21'] = v21.round(3)
     out['sma40'] = v40.round(3)
+    v50 = sma50.iloc[-1]
+    out['sma50'] = v50.round(3)
 
     # ATR-units extension (primary)
     out['ext_21ema_atr'] = ((last_c - v21) / last_atr).replace([np.inf, -np.inf], np.nan).round(2)
     out['ext_40sma_atr'] = ((last_c - v40) / last_atr).replace([np.inf, -np.inf], np.nan).round(2)
+
+    out['ext_50sma_atr'] = ((last_c - v50) / last_atr).replace([np.inf, -np.inf], np.nan).round(2)
 
     # exact ALEX dist() variant
     out['ext_21ema_alex'] = (((last_c - v21) / v21) / (last_atr_pct / 100)).round(2)

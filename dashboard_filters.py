@@ -52,8 +52,8 @@ def _within_high():
 
 
 def _adr():
-    return [('All', None), ('< 2%', (None, 2)), ('2 - 5%', (2, 5)),
-            ('5 - 10%', (5, 10)), ('10 - 20%', (10, 20)), ('> 20%', (20, None))]
+    return [('All', None), ('> 3.3%', (3.3, None)), ('< 2%', (None, 2)),
+            ('2 - 5%', (2, 5)), ('5 - 10%', (5, 10)), ('10 - 20%', (10, 20)), ('> 20%', (20, None))]
 
 
 def _volume():
@@ -234,6 +234,11 @@ def build_advanced_mask(df: pd.DataFrame, advanced: dict,
                      else flags.all(axis=1))
     if a['adv_stages']:
         mask &= df['stage'].isin(a['adv_stages'])
+    # Trading Voyage (Ollie) rule: separate caps vs the 21 EMA and the 50 SMA
+    if a.get('adv_max_ext21', 10.0) < 10.0:
+        mask &= df['ext_21ema_atr'].fillna(99) <= a['adv_max_ext21']
+    if a.get('adv_max_ext50', 10.0) < 10.0 and 'ext_50sma_atr' in df.columns:
+        mask &= df['ext_50sma_atr'].fillna(99) <= a['adv_max_ext50']
     if a['adv_max_ext'] < 10.0:
         mask &= (df['ext_21ema_atr'].fillna(99) <= a['adv_max_ext']) & \
                 (df['ext_40sma_atr'].fillna(99) <= a['adv_max_ext'])
@@ -318,6 +323,22 @@ PRESETS = {
                        'adr': ('custom', 6.0, 60.0), 'adv': '> $20M'},
         'advanced': {},
     },
+    # Trading Voyage (Ollie) funnel as single presets (Workflows tab has the
+    # full multi-stage version). The 1M/3M/6M momentum UNION stage is not
+    # expressible here (presets AND their selections) so it is left out.
+    'TW: Tight and orderly': {
+        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3.3%',
+                       'adv': '> $1M', 'vs50': '> 0%', 'vs200': '> 0%'},
+        'advanced': {'adv_stages': ['2A', '2B'], 'adv_rti_zone': ['1', '2'],
+                     'adv_gold_launch_pad': True},
+    },
+    'TW: not extended': {
+        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3.3%',
+                       'adv': '> $1M', 'vs50': '> 0%', 'vs200': '> 0%'},
+        'advanced': {'adv_stages': ['2A', '2B'], 'adv_rti_zone': ['1', '2'],
+                     'adv_gold_launch_pad': True, 'adv_max_ext21': 3.0,
+                     'adv_max_ext50': 5.0},   # Ollie: <=3 ATR/21EMA, <=5 ATR/50SMA
+    },
     'Large-cap uptrend pullback': {
         'selections': {'mktcap': '> $10B (large)', 'vs200': '> 0%',
                        'within_high': 'within 25%', 'adv': '> $5M'},
@@ -379,6 +400,8 @@ ADVANCED_DEFAULTS = {
     'adv_leaders_mode': 'Any (union)',
     'adv_stages': [],
     'adv_max_ext': 10.0,
+    'adv_max_ext21': 10.0,
+    'adv_max_ext50': 10.0,
     'adv_min_rs': 0.0,
     'adv_min_count': 0,
     'adv_rti_zone': [],
@@ -454,6 +477,61 @@ def saved_lists() -> list:
     if not MY_LISTS.exists():
         return []
     return sorted(p.stem for p in MY_LISTS.glob('*.csv'))
+
+
+# --------------------------------------------------- TradingView export ----
+# TradingView's "Upload list…" wants a .txt of EXCHANGE:SYMBOL tokens, comma
+# separated, with optional ###header section dividers; ≤ 1000 symbols per file.
+# "The input file must be in the .txt format and symbols should have the
+#  exchange prefix and comma separated."
+# https://www.tradingview.com/support/solutions/43000487233
+TV_EXCHANGE_MAP = {
+    'NASDAQ': 'NASDAQ',
+    'NYSE': 'NYSE',
+    'NYSE ARCA': 'AMEX',
+    'NYSEARCA': 'AMEX',
+    'NYSE AMERICAN': 'AMEX',
+    'AMEX': 'AMEX',
+    'BATS': 'AMEX',
+    'CBOE': 'CBOE',
+    'OTC': 'OTC',
+}
+
+
+def tradingview_watchlist(tickers, exchanges=None, section=None) -> str:
+    """Render tickers as TradingView watchlist `.txt` text.
+
+    `tickers`   sequence of symbols, or a DataFrame / Series indexed by ticker
+                (its `exchange` column is used automatically when present).
+    `exchanges` optional ``{ticker: raw exchange name}``; a ticker whose
+                exchange maps to a known TradingView market is emitted as
+                ``EXCHANGE:SYMBOL``, otherwise bare (TradingView auto-resolves
+                unambiguous US equities).
+    `section`   optional header, emitted first as a ``###section`` divider.
+    """
+    if hasattr(tickers, 'index') and not isinstance(tickers, (list, tuple, set)):
+        cols = getattr(tickers, 'columns', None)
+        exch_col = (tickers['exchange'] if exchanges is None and cols is not None
+                    and 'exchange' in cols else None)
+        exchanges = exchanges or {}
+        pairs = [(t, exch_col.iloc[k] if exch_col is not None
+                  else exchanges.get(t))
+                 for k, t in enumerate(tickers.index)]
+    else:
+        exchanges = exchanges or {}
+        pairs = [(t, exchanges.get(t)) for t in tickers]
+    seen, toks = set(), []
+    if section:
+        toks.append('###' + str(section).strip())
+    for t, exch in pairs:
+        sym = str(t).strip().upper()
+        if not sym or sym == 'NAN' or sym in seen:
+            continue
+        seen.add(sym)
+        exch = '' if exch is None or exch != exch else str(exch)  # NaN -> ''
+        pfx = TV_EXCHANGE_MAP.get(exch.strip().upper())
+        toks.append(f'{pfx}:{sym}' if pfx else sym)
+    return ','.join(toks) + '\n'
 
 
 # ---------------------------------------------------- workflow store -------
