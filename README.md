@@ -101,7 +101,7 @@ Order Results by, Sort Order, "Showing 1 to N of M", per-row selection with
 download, and a **TradingView `.txt`** export (`EXCHANGE:SYMBOL`,
 comma-separated, `###` section divider — paste into TradingView's *Upload
 list…*; `dfil.tradingview_watchlist()`, offered on every results table:
-All Results, Focus List, Leaders, Confluence, Timing, Patterns, Workflows).
+Leaders, Screener, Focus List, Confluence, Timing, Patterns, Workflows).
 Advanced filters (stage, RS, RTI, leaders
 union/intersection, exchange, index) in a collapsible section. The
 **Re-run screeners** button executes `run_screeners.py` from the UI.
@@ -147,13 +147,14 @@ previous one (or the full universe) with the *same* `dfil.build_mask` +
 List** (the deduped union of the stages flagged `focus_input`) plus a manual
 pre-entry checklist for the parts that need pre-market / catalyst / breadth data.
 
-- **Run view** — the stepper: per-stage `in → out` counts, filter summary,
-  rationale note, expandable table; then the Focus List (sparklines,
+- **Run** (default) — the stepper: per-stage `in → out` counts, filter
+  summary, rationale note, expandable table; then the Focus List (sparklines,
   save-as-list, CSV) and the checklist.
-- **Build view** — construct/reorder/retune stages in an inline editor (the
-  same threshold grid as All Results, keyed per stage), edit the checklist,
-  **Save** to `my_workflows/*.json`. Built-ins are read-only; **Edit /
-  Duplicate** opens one as an editable copy.
+- **Edit** — **✎ Edit / Duplicate** or **＋ New** opens the builder:
+  construct/reorder/retune stages in an inline editor (the same threshold grid
+  as the Screener tab, keyed per stage), edit the checklist; **💾 Save** (to
+  `my_workflows/*.json`) or **Discard** returns to the run. Built-ins are
+  read-only; Edit / Duplicate opens one as an editable copy.
 - Ships with `Trading Voyage (Ollie)` and `Trading Voyage - Daily studies
   (Ollie)` — the Voyage Trading Group method (`sandBox/Oliver_wiedmeier/`).
 - New columns for it: `pct_above_{21,63,126}d_low` (`src/indicators.

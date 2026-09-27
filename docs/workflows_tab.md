@@ -17,7 +17,9 @@
 >   the *rendering* of the grid, never the *masking* — `build_mask` /
 >   `build_advanced_mask` stay the single source of truth.
 > - Toolbar Edit/New/Delete/Save/Discard are `on_click` callbacks (writing
->   `wf_mode` / `wf_selected` after the widgets instantiate is not allowed).
+>   `wf_selected` after the widgets instantiate is not allowed). There is no
+>   Run/Build view switch any more: a `wf_draft` in session state *is* edit
+>   mode — Edit/New open it, Save/Discard close it.
 > - `selection_to_range()` now accepts a `list` as well as a `tuple` for a
 >   `('custom', lo, hi)` value — `config.WORKFLOWS` built-ins reach it via a
 >   JSON round trip, which turns tuples into lists.

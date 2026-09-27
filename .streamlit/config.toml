@@ -1,0 +1,5 @@
+[global]
+# dashboard.py copies every widget value forward each rerun (so hidden
+# sections keep their state) and presets write widget keys directly — both
+# are intended, so silence the "default value AND session state" warning.
+disableWidgetStateDuplicationWarning = true

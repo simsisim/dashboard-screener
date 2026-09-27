@@ -58,6 +58,30 @@ def ss(session_state, key, default=None):
         return default
 
 
+# Streamlit 1.47 AppTest bug: ButtonGroup (st.pills / st.segmented_control)
+# assumes a list value, but single-select holds a plain str (or None) — it
+# then indexes the options letter by letter ("ValueError: content: 'L'").
+# The browser is fine; normalise the value for the test harness only.
+from streamlit.testing.v1.element_tree import ButtonGroup  # noqa: E402
+_bg_value = ButtonGroup.value.fget
+
+
+def _bg_value_as_list(self):
+    v = _bg_value(self)
+    return [] if v is None else [v] if isinstance(v, str) else v
+
+
+ButtonGroup.value = property(_bg_value_as_list)
+
+
+def _app(tab: str, timeout: int) -> AppTest:
+    """AppTest opened on one dashboard section — only the active section's
+    widgets are built per run (tab bar = the `active_tab` radio)."""
+    at = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=timeout)
+    at.session_state['active_tab'] = tab
+    return at
+
+
 def caption_count(at):
     for c in at.caption:
         m = re.search(r'of ([\d,]+) results', str(c.value))
@@ -67,7 +91,7 @@ def caption_count(at):
 
 
 def main():
-    at = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at = _app('all', 300)
     at.run()
     check('boot: 0 exceptions', len(at.exception) == 0,
           at.exception[0].message[:120] if at.exception else '')
@@ -149,7 +173,7 @@ def main():
     # previous widget tree on set_value, and a widget that disappeared
     # mid-session breaks the replay — a fresh session is also the realistic
     # cross-reload scenario)
-    at_rt = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at_rt = _app('all', 300)
     at_rt.run()
     [s for s in at_rt.selectbox if s.label == "Ioa's Presets"][0] \
         .set_value('Momentum Leader (Narrow)').run()
@@ -168,7 +192,7 @@ def main():
     dfil.save_screener('tmp_rt_check',
                        dict(dfil.PRESETS['Momentum Leader (Narrow)']['selections']),
                        dict(dfil.PRESETS['Momentum Leader (Narrow)']['advanced']))
-    at_rt2 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at_rt2 = _app('all', 300)
     at_rt2.run()
     [s for s in at_rt2.selectbox if s.key == 'my_screener_sel'][0] \
         .set_value('tmp_rt_check').run()
@@ -180,7 +204,7 @@ def main():
     dfil.delete_screener('tmp_rt_check')
 
     # ---- 4. save -> dropdown refresh (fresh app for a clean marker) -------
-    at2 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at2 = _app('all', 300)
     at2.run()
     for t in at2.text_input:
         if t.key == 'save_as_name':
@@ -204,8 +228,35 @@ def main():
           ss(at2.session_state, 'save_as_name') == ''
           and ss(at2.session_state, 'save_list_name') == '')
 
+    # ---- 5b. tab bar: first Combine pick keeps the section; All Results
+    # state survives a trip to another section (st.tabs snapped back) -------
+    at9 = _app('all', 300)
+    at9.run()
+    at9.multiselect(key='sel_sector').set_value(['Technology services']).run()
+    at9.session_state['comb_inc_Leaders'] = ['Minervini 8/8 (liquid)',
+                                             'SCOOTER >= 90']
+    at9.run()
+    at9.radio(key='comb_mode').set_value('Any (OR)').run()
+    _exp_or = int(dfil.combine_screens(
+        res, ['Minervini 8/8 (liquid)', 'SCOOTER >= 90'], [], 'any')[0].sum())
+    _md = ' '.join(str(m.value) for m in at9.markdown)
+    check('combine: OR over chip picks == data-level union',
+          f'→ **{_exp_or}** tickers' in _md, f'expected {_exp_or}')
+    check('tabs: first combine pick keeps All Results',
+          ss(at9.session_state, 'active_tab') == 'all'
+          and len(at9.exception) == 0)
+    at9.radio(key='active_tab').set_value('leaders').run()
+    at9.radio(key='active_tab').set_value('all').run()
+    check('tabs: All Results state survives a section switch',
+          ss(at9.session_state, 'sel_sector') == ['Technology services']
+          and ss(at9.session_state, 'comb_inc_Leaders') == [
+              'Minervini 8/8 (liquid)', 'SCOOTER >= 90']
+          and ss(at9.session_state, 'comb_mode') == 'Any (OR)'
+          and len(at9.exception) == 0,
+          f"sel_sector={ss(at9.session_state, 'sel_sector')}")
+
     # ---- Timing Signals tab (feedback_4.md Task 4): on-demand run -----
-    at3 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=900)
+    at3 = _app('timing', 900)
     at3.run()
     check('timing tab: boot 0 exceptions', len(at3.exception) == 0)
     for ms in at3.multiselect:
@@ -246,7 +297,7 @@ def main():
           warm < max(60.0, elapsed), f'cold={elapsed:.1f}s warm={warm:.1f}s')
 
     # ---- Patterns tab (feedback_4.md Tasks 5-7): GLB + Cup & Handle ----
-    at4 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=900)
+    at4 = _app('patterns', 900)
     at4.run()
     check('patterns tab: boot 0 exceptions', len(at4.exception) == 0)
     for ms in at4.multiselect:
@@ -310,7 +361,7 @@ def main():
     # ---- GLB confirmation regression (feedback_6.md): Confirmation=3m
     # must produce a cache file DISTINCT from 1m — a config typo (reusing
     # 21 for 3m) would otherwise be invisible ----
-    at6 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=900)
+    at6 = _app('patterns', 900)
     at6.run()
     for ms in at6.multiselect:
         if ms.key == 'pt_index':
@@ -350,7 +401,7 @@ def main():
     # filename independently (same hash formula as the app) and asserts
     # the app actually served that file after each run. ----
     import hashlib
-    at5 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=900)
+    at5 = _app('patterns', 900)
     at5.run()
     for ms in at5.multiselect:
         if ms.key == 'pt_index':
@@ -386,7 +437,7 @@ def main():
     # ---- Confluence tab (IMPLEMENTATION_PLAN.md §19) ----
     # renders with NO on-demand cache needed (pure aggregation over `full`);
     # min-families filter + rank-by control + save-as-list.
-    at7 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at7 = _app('confluence', 300)
     at7.run()
     check('confluence tab: boot 0 exceptions', len(at7.exception) == 0,
           at7.exception[0].message[:120] if at7.exception else '')
@@ -432,7 +483,7 @@ def main():
 
     # ---- 8. Workflows tab (docs/workflows_tab.md) ------------------------
     from src import workflow as wf_mod
-    at8 = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=300)
+    at8 = _app('workflows', 300)
     at8.run()
     check('workflows tab: boot 0 exceptions', len(at8.exception) == 0,
           at8.exception[0].message[:120] if at8.exception else '')
@@ -452,15 +503,14 @@ def main():
           ui_focus == _eng_focus, f'ui={ui_focus} engine={_eng_focus}')
 
     # build view: Edit/Duplicate -> a draft appears, Save writes my_workflows/
-    for r in at8.radio:
-        if r.key == 'wf_mode':
-            r.set_value('✎ Build view').run()
     for b in at8.button:
         if b.key == 'wf_edit_btn':
             b.click().run()
     has_save = any(b.key == 'wf_save_btn' for b in at8.button)
     check('workflows tab: Edit opens a build-view draft', has_save,
           f'draft={ss(at8.session_state, "wf_draft") is not None}')
+    check('workflows tab: editing hides the run toolbar',
+          not any(b.key == 'wf_edit_btn' for b in at8.button))
 
     # open the stage-2 editor (the st.form with the grid + Match radio)
     for b in at8.button:

@@ -132,43 +132,93 @@ if c2.button('Re-run screeners', on_click=rerun_screeners):
     pass
 st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md there.")
 
-(tab_focus, tab_leaders, tab_all, tab_confluence, tab_timing, tab_patterns,
- tab_workflows, tab_detail) = st.tabs(
-    ['🎯 Focus List', '🏆 Leaders’ Lists', '🔎 All Results (filter panel)',
-     '🎖️ Confluence', '🕐 Timing Signals', '🌊 Patterns', '🧭 Workflows',
-     '📋 Ticker detail'])
+# Tab bar = a horizontal radio, not st.tabs: st.tabs keeps the selected tab
+# only in the browser, so a rerun that reshapes the page (e.g. the first
+# Combine-screens pick) snapped back to the first tab. The radio's value is
+# server-side session state, and only the active section is built per rerun.
+TABS = {
+    'leaders': '🏆 Leaders’ Lists',
+    'all': '🔎 Screener',
+    'focus': '🎯 Focus List',
+    'confluence': '🎖️ Confluence',
+    'timing': '🕐 Timing Signals',
+    'patterns': '🌊 Patterns',
+    'workflows': '🧭 Workflows',
+    'detail': '📋 Ticker detail',
+}
+# Only the active section's widgets are drawn, and Streamlit drops the state
+# of any keyed widget not drawn in a run — so switching tabs would wipe e.g.
+# the Screener filters. Re-assigning each value to itself turns it into
+# plain session state, which survives. Buttons, uploads, downloads and table
+# selections can't be written via session_state, so they are skipped.
+_NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'lists_uploader',
+               'ts_run', 'pt_run',
+               'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
+               'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
+               'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
+               'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
+_NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
+                      'wf_dupe_', 'wf_dropstg_', 'lead_tv_', 'wf_stage_csv_',
+                      'wf_stage_tv_')
+for _k in list(st.session_state.keys()):
+    if _k not in _NO_PERSIST and not _k.startswith(_NO_PERSIST_PREFIX):
+        st.session_state[_k] = st.session_state[_k]
 
-# Streamlit 1.47's st.tabs can't remember the selected tab: every rerun
-# (any widget click) snaps back to the first one. Remember the clicked tab in
-# sessionStorage and re-click it whenever the DOM shows a different one.
-import streamlit.components.v1 as _components  # noqa: E402
-_components.html("""<script>
-(function () {
-  var P = window.parent, D = P.document;
-  if (P.__tabKeeper) return;
-  P.__tabKeeper = true;
-  var KEY = 'dashboard_active_tab';
-  function tabs() {
-    return D.querySelectorAll('[data-baseweb="tab-list"] button[role="tab"]');
-  }
-  D.addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('button[role="tab"]');
-    if (!b) return;
-    var i = Array.prototype.indexOf.call(tabs(), b);
-    if (i >= 0) P.sessionStorage.setItem(KEY, String(i));
-  }, true);
-  function restore() {
-    var i = P.sessionStorage.getItem(KEY), t = tabs();
-    if (i === null || !t[i]) return;
-    if (t[i].getAttribute('aria-selected') !== 'true') t[i].click();
-  }
-  new MutationObserver(restore).observe(D.body, {childList: true, subtree: true});
-  restore();
-})();
-</script>""", height=0)
+ACTIVE_TAB = st.radio('Section', list(TABS), format_func=TABS.get,
+                      horizontal=True, key='active_tab',
+                      label_visibility='collapsed')
+st.divider()
 
-# ------------------------------------------ All Results (sketch layout) --
+# --------------------------------------------- Screener (sketch layout) --
 import dashboard_filters as dfil  # noqa: E402
+
+
+# ---- sparkline closes (lazy per-ticker read) — shared by Screener,
+# Confluence and Workflows, so it lives at module level
+@st.cache_data(show_spinner=False)
+def _spark_closes(symbol: str, run_name: str):
+    """Last ~120 daily closes for one ticker; None when no file.
+    run_name IS part of the cache key (no leading underscore) so a
+    fresh screener run re-reads the updated daily files."""
+    for stem in (symbol, symbol.replace('.', '-')):
+        for base in (config.DAILY_CURRENT, config.DAILY_ARCHIVE):
+            p = base / f'{stem}.csv'
+            if p.exists():
+                try:
+                    s = pd.read_csv(p, usecols=['Close'])['Close']
+                    return [round(float(x), 2) for x in s.tail(120)]
+                except Exception:
+                    return None
+    return None
+
+
+def _universe_line() -> str:
+    """'How … is built' opener shared by every tab: what the screening
+    universe is, with counts as recorded by THIS run (report.write_dashboard's
+    "Universe: N tickers | loaded: … | missing: … | short history: …")."""
+    _md = run / 'dashboard.md'
+    m = re.search(r'Universe: (\d+) tickers \| loaded: (\d+) \| '
+                  r'missing: (\d+) \| short history: (\d+)',
+                  _md.read_text() if _md.exists() else '')
+    n_uni, n_load, n_miss, n_short = (m.groups() if m
+                                      else ('?', str(len(full)), '?', '?'))
+    return (f'<b>Universe</b> — <code>{config.UNIVERSE_CSV.name}</code> used '
+            f'as-is, <b>no pre-filter</b> (no market-cap, price, volume or '
+            f'exchange cut): {n_uni} tickers. {n_miss} have no daily price '
+            f'file and are skipped → {n_load} screened. {n_short} of those '
+            f'have &lt; {config.MIN_BARS_TEMPLATE} daily bars: too short for '
+            f'Minervini / SCTR, but they can still pass CANSLIM '
+            f'(fundamentals only)')
+
+
+def _how_built(title: str, lines: list):
+    """Collapsed info box: one gray italic line per rule (HTML, since
+    Streamlit doesn't parse markdown inside a raw <div>)."""
+    with st.expander(title):
+        for line in lines:
+            st.markdown(f'<div style="color:gray;font-style:italic;'
+                        f'margin-bottom:0.4rem">{line}</div>',
+                        unsafe_allow_html=True)
 
 
 def _tv_txt(frame, section: str) -> bytes:
@@ -227,6 +277,9 @@ def _reset_filters():
         st.session_state[f'sel_{k}'] = 'All'
     for k, default in dfil.ADVANCED_DEFAULTS.items():
         st.session_state[k] = default
+    for k in [k for k in st.session_state
+              if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
+        st.session_state[k] = []
     for k, default in {'search': '', 'my_list_sel': '— None Selected —',
                        'apply_upload': False,
                        'preset_sel': '— None Selected —',
@@ -234,13 +287,19 @@ def _reset_filters():
                        '_applied_preset': '— None Selected —',
                        '_applied_screener': '— None Selected —',
                        'save_as_name': '', 'save_list_name': '',
+                       'comb_mode': 'All (AND)',
                        '_flash': ''}.items():
         st.session_state[k] = default
 
 
 _init_filter_state()
 
-with tab_all:
+if ACTIVE_TAB == 'all':
+    _how_built('ℹ️ How the Screener is built', [
+        _universe_line(),
+        'Every screen, preset and filter below narrows this universe; the '
+        'Combine step and the Filters panel are ANDed together',
+    ])
     # ---------------- top bar: Presets | Lists | My Screener | My Lists ----
     tb1, tb2, tb3, tb4 = st.columns(4)
     with tb1:
@@ -318,6 +377,76 @@ with tab_all:
     _msg = st.session_state.pop('_flash', None)
     if _msg:
         st.success(_msg)
+    st.divider()
+
+    # ------------------ combine screens (mask-level AND / OR / NOT) -------
+    st.subheader('Combine screens')
+    # chip picker like the StockCharts Screener: one 'comb_inc_<category>' /
+    # 'comb_exc_<category>' pills widget per category; the Include / Exclude
+    # sets are the union over categories (hidden categories' picks survive
+    # via the tab-bar state carry-forward at the top of the script)
+    _cats = dfil.screen_categories()
+    for _k in [k for k in st.session_state
+               if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
+        _ok = _cats.get(_k[9:], [])            # drop deleted screeners
+        st.session_state[_k] = [x for x in (st.session_state[_k] or [])
+                                if x in _ok]
+    if st.session_state.get('comb_cat') not in _cats:
+        st.session_state['comb_cat'] = next(iter(_cats))
+    st.session_state.setdefault('comb_pick_as', 'Include')
+    comb_include = [x for c in _cats
+                    for x in st.session_state.get(f'comb_inc_{c}') or []]
+    comb_exclude = [x for c in _cats
+                    for x in st.session_state.get(f'comb_exc_{c}') or []]
+
+    st.markdown('**1&nbsp;&nbsp;Pick screens**')
+    with st.container(border=True):
+        pc1, pc2 = st.columns([1, 2])
+        with pc1:
+            comb_cat = st.pills('Category', list(_cats), key='comb_cat',
+                                selection_mode='single') or next(iter(_cats))
+            pick_as = st.segmented_control(
+                'Clicking a screen adds it to', ['Include', 'Exclude (NOT)'],
+                key='comb_pick_as') or 'Include'
+        with pc2:
+            _pref = 'comb_inc_' if pick_as == 'Include' else 'comb_exc_'
+            st.pills(f'Screens in {comb_cat}'
+                     + ('' if pick_as == 'Include' else ' — excluding'),
+                     _cats[comb_cat], selection_mode='multi',
+                     key=_pref + comb_cat,
+                     help="Ioa's presets and your saved screeners ('My: …'), "
+                          'each evaluated on its own. Click again to remove.')
+
+    def _clear_combine():
+        for _k in [k for k in st.session_state
+                   if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
+            st.session_state[_k] = []
+
+    comb_mode = st.session_state.get('comb_mode', 'All (AND)')
+    comb_mask, comb_hits = dfil.combine_screens(
+        full, comb_include, comb_exclude,
+        'any' if comb_mode.startswith('Any') else 'all', IDX_MAP)
+    st.markdown('**2&nbsp;&nbsp;Combine**')
+    with st.container(border=True):
+        if not (comb_include or comb_exclude):
+            st.caption('No screens picked yet — pick one or more above. '
+                       'The Filters panel below is ANDed on top of the result.')
+        else:
+            cc1, cc2 = st.columns([4, 1])
+            with cc2:
+                st.radio('Match', ['All (AND)', 'Any (OR)'], key='comb_mode',
+                         disabled=len(comb_include) < 2)
+            with cc1:
+                _join = ' · AND · ' if comb_mode.startswith('All') else ' · OR · '
+                _expr = _join.join(
+                    f'`{c}` ({int(comb_hits[c].sum())})' for c in comb_hits)
+                if comb_exclude:
+                    _expr += ((' · ' if _expr else '')
+                              + ' · '.join(f'NOT `{c}`' for c in comb_exclude))
+                st.markdown(_expr)
+                st.markdown(f'→ **{int(comb_mask.sum())}** tickers')
+                st.button('Clear all screens', key='comb_clear',
+                          on_click=_clear_combine)
     st.divider()
 
     # --------------------------- filter rows (sketch rows 1-4) ------------
@@ -518,7 +647,18 @@ with tab_all:
                  'industry', 'index_membership',
                  'in_minervini', 'in_canslim', 'in_scooter', 'sources']
     view_cols = [c for c in view_cols if c in full.columns]
+    mask &= comb_mask
     filtered = full[mask][view_cols]
+    if comb_hits.shape[1]:
+        # which Include screens each ticker hit — sort by 'hits' in OR mode
+        # to rank the names several methods agree on
+        _h = comb_hits.loc[filtered.index]
+        filtered = filtered.copy()
+        filtered.insert(0, 'matched_by', [
+            ', '.join(c for c, v in r.items() if v)
+            for _t, r in _h.iterrows()])
+        filtered.insert(0, 'hits', _h.sum(axis=1).astype(int))
+        view_cols = ['hits', 'matched_by'] + view_cols
 
     # ------------------------- results section (sketch) --------------------
     active_name = (preset_sel if preset_sel != '— None Selected —'
@@ -529,6 +669,8 @@ with tab_all:
     search = sc1.text_input('Search', key='search', placeholder='Ticker or name…')
     n_results = sc2.selectbox('Number of Results', [30, 50, 100, 500, 'All'],
                               key='result_n')
+    if st.session_state.get('order_by') not in view_cols:
+        st.session_state.pop('order_by', None)   # e.g. 'hits' after un-combining
     order_by = sc3.selectbox('Order Results by', view_cols, key='order_by')
     sort_order = sc4.selectbox('Sort Order', ['Descending', 'Ascending'],
                                key='sort_order')
@@ -547,23 +689,6 @@ with tab_all:
     st.caption(f'Showing 1 to {n_show:,} of {len(result):,} results '
                f'({len(full):,} tickers screened)')
     show = result if n_results == 'All' else result.head(int(n_results))
-
-    # ---- sparkline closes for the shown rows (lazy per-ticker read) -------
-    @st.cache_data(show_spinner=False)
-    def _spark_closes(symbol: str, run_name: str):
-        """Last ~120 daily closes for one ticker; None when no file.
-        run_name IS part of the cache key (no leading underscore) so a
-        fresh screener run re-reads the updated daily files."""
-        for stem in (symbol, symbol.replace('.', '-')):
-            for base in (config.DAILY_CURRENT, config.DAILY_ARCHIVE):
-                p = base / f'{stem}.csv'
-                if p.exists():
-                    try:
-                        s = pd.read_csv(p, usecols=['Close'])['Close']
-                        return [round(float(x), 2) for x in s.tail(120)]
-                    except Exception:
-                        return None
-        return None
 
     table = show.round(2).copy()
     col_cfg = None
@@ -622,7 +747,28 @@ with tab_all:
         st.rerun()
 
 # ------------------------------------------------------------ leaders -----
-with tab_leaders:
+if ACTIVE_TAB == 'leaders':
+    _how_built('ℹ️ How these lists are built', [
+        _universe_line(),
+        f'<b>Minervini trend template</b> — all {config.MINERVINI_MIN_PASS} '
+        f'of: close > SMA150 & SMA200 · SMA150 > SMA200 · SMA200 rising '
+        f'({config.MINERVINI_SLOPE_WINDOW}d slope > 0) · SMA50 > SMA150 & '
+        f'SMA200 · close > SMA50 · close ≥ '
+        f'{config.MINERVINI_ABOVE_52W_LOW:.2f}× 52w low · close ≥ '
+        f'{config.MINERVINI_FROM_52W_HIGH:.2f}× 52w high · RS percentile ≥ '
+        f'{config.MINERVINI_MIN_RS} (IBD-style blend)',
+        f'<b>CANSLIM C-A-I</b> — C: latest quarterly EPS YoY ≥ '
+        f'+{config.CANSLIM_C_MIN_YOY:.0%} (year-ago EPS ≥ '
+        f'${config.CANSLIM_C_MIN_BASE_EPS:.2f}) · A: 3y annual EPS CAGR ≥ '
+        f'+{config.CANSLIM_A_MIN_CAGR:.0%} · I: institutional ownership ≥ '
+        f'{config.CANSLIM_I_MIN_INST:.0%} — all three',
+        f'<b>SCOOTER / SCTR</b> — StockCharts Technical Rank ≥ '
+        f'{config.SCOOTER_MIN_SCORE:.0f}: 60% long-term (% vs 200 EMA, '
+        f'125d ROC), 30% mid (% vs 50 EMA, 20d ROC), 10% short (RSI14, PPO '
+        f'slope), ranked 0–99.9 within this universe',
+        '<b>Union</b> — every ticker in at least one of the three lists, '
+        'deduped; <code>sources</code> / <code>n_sources</code> show which',
+    ])
     for name, label in [('minervini', 'Minervini trend template (8/8)'),
                         ('canslim', 'CANSLIM C-A-I'),
                         ('scooter', 'SCOOTER / SCTR ≥ 90'),
@@ -643,9 +789,23 @@ with tab_leaders:
                     mime='text/plain', key=f'lead_tv_{name}', help=_TV_HELP)
 
 # ------------------------------------------------------------- focus ------
-with tab_focus:
-    st.markdown(f"**{len(focus)} tickers** — leaders ∩ stage ∈ {{2A, 2B}} ∩ "
-                f"not very-extended ∩ liquid. Sorted by SCOOTER.")
+if ACTIVE_TAB == 'focus':
+    # mirrors run_screeners.py's focus gates (defaults; CLI overrides such as
+    # --stages / --no-liquidity-gate aren't recorded in the run)
+    _how_built('ℹ️ How the Focus List is built', [
+        _universe_line(),
+        '<b>Leaders</b> — in at least one Leaders’ List (Minervini, CANSLIM or '
+        'SCOOTER; see the Leaders’ Lists tab)',
+        f'<b>Stage</b> — Weinstein stage {" or ".join(config.FOCUS_STAGES)} '
+        '(early / mid uptrend)',
+        f'<b>Not very extended</b> — ≤ {config.EXT_THRESHOLD_2:g} ATR above '
+        f'both the {config.EXT_EMA_PERIOD} EMA and the {config.EXT_SMA_PERIOD} SMA',
+        f'<b>Liquid</b> — {config.ADV_PERIOD}-day average dollar volume ≥ '
+        f'${config.MIN_ADV_DOLLAR / 1e6:g}M'
+        + ('' if config.APPLY_LIQUIDITY_GATE else ' (gate currently OFF)'),
+        '<b>Sort</b> — SCOOTER (SCTR) score, highest first',
+    ])
+    st.markdown(f"**{len(focus)} tickers**")
     if len(focus):
         st.dataframe(focus.round(2), use_container_width=True, height=520)
         fc1, fc2, _fc3 = st.columns([1, 1, 2])
@@ -755,7 +915,7 @@ def _confluence_cards(df_top: pd.DataFrame, circle_key: str):
     return '\n'.join(rows)
 
 
-with tab_confluence:
+if ACTIVE_TAB == 'confluence':
     st.caption('Badge-count leaders — the names lit up by the most independent '
                'method *families*. Pure aggregation over the latest daily run '
                f'(`{run.name}`); press "Re-run screeners" above to refresh. '
@@ -854,7 +1014,7 @@ with tab_confluence:
             st.success(f'saved {len(_tk)} tickers to my_lists/{cf_ln.strip()}.csv')
 
 # ------------------------------------------------------------- detail -----
-with tab_detail:
+if ACTIVE_TAB == 'detail':
     ticker = st.selectbox('Ticker', sorted(full.index))
     if ticker:
         row = full.loc[ticker]
@@ -960,7 +1120,7 @@ def _spark_closes_ts(symbol: str, run_name: str):
     return None
 
 
-with tab_timing:
+if ACTIVE_TAB == 'timing':
     st.caption('On-demand timing signals — computed for the scoped subset '
                'only (never part of the daily batch). Each row shows its '
                'own as-of bar date.')
@@ -1120,7 +1280,7 @@ with tab_timing:
 # parameters (GLB sliders; Cup & Handle named presets). Same shared
 # scope/Run/progress/persist plumbing as the Timing Signals tab.
 
-with tab_patterns:
+if ACTIVE_TAB == 'patterns':
     st.caption('On-demand pattern detectors — scoped computation; GLB '
                'uses an incremental per-ticker cache (results/glb_cache/).')
 
@@ -1482,7 +1642,7 @@ def _wf_stage_editor(draft: dict, i: int):
                 f'{dfil.SPEC_BY_KEY[k][0]} {v[1]:g}–{v[2]:g}'
                 for k, v in carried_custom.items()))
 
-        st.markdown('**Stage filter** — same grid as the All Results panel')
+        st.markdown('**Stage filter** — same grid as the Screener tab')
         match = st.radio(
             'Combine the filters below with', ['all (AND)', 'any (OR)'],
             index=1 if stg.get('match') == 'any' else 0,
@@ -1581,8 +1741,8 @@ def _wf_stage_editor(draft: dict, i: int):
 
 def _wf_cb_edit():
     """on_click: open the selected workflow for editing (built-ins as a
-    copy). Widget-keyed state (wf_mode / wf_selected) can only be written
-    from a callback — it runs before the widgets re-instantiate."""
+    copy). Widget-keyed state (wf_selected) can only be written from a
+    callback — it runs before the widgets re-instantiate."""
     name = st.session_state.get('wf_selected')
     src = dfil.load_workflow(name) or {'name': name, 'stages': []}
     if dfil.is_builtin_workflow(name):
@@ -1602,7 +1762,6 @@ def _wf_open_draft(src: dict):
     just persist their own edits afterwards."""
     st.session_state['wf_draft'] = src
     st.session_state['wf_edit_idx'] = -1
-    st.session_state['wf_mode'] = '✎ Build view'
     st.session_state['wf_save_name'] = src.get('name', '')
     st.session_state['wf_cl_edit'] = '\n'.join(src.get('checklist', []))
 
@@ -1617,7 +1776,6 @@ def _wf_cb_delete():
 
 def _wf_cb_discard():
     st.session_state['wf_draft'] = None
-    st.session_state['wf_mode'] = '▶ Run view'
 
 
 def _wf_cb_save():
@@ -1640,11 +1798,10 @@ def _wf_cb_save():
     dfil.save_workflow(name, draft)
     st.session_state['wf_draft'] = None
     st.session_state['wf_selected'] = name
-    st.session_state['wf_mode'] = '▶ Run view'
     st.session_state['wf_flash'] = f'saved my_workflows/{name}.json'
 
 
-with tab_workflows:
+if ACTIVE_TAB == 'workflows':
     st.session_state.setdefault('wf_draft', None)
     st.session_state.setdefault('wf_edit_idx', -1)
     st.session_state.setdefault('wf_ed_nonce', 0)
@@ -1653,19 +1810,36 @@ with tab_workflows:
     _saved = dfil.saved_workflows()
     wf_names = _bi + [s for s in _saved if s not in _bi]
 
-    tw1, tw2 = st.columns([3, 2])
-    wf_sel = tw1.selectbox('Workflow', wf_names, key='wf_selected')
-    wf_mode = tw2.radio('View', ['▶ Run view', '✎ Build view'],
-                        key='wf_mode', horizontal=True)
+    # one path in, one path out: the tab shows the selected workflow's run;
+    # ✎ Edit / Duplicate or ＋ New opens the builder (a draft exists), and
+    # 💾 Save / Discard closes it again — no separate view switch
+    draft = st.session_state.get('wf_draft')
+    wf_sel = st.session_state.get('wf_selected') or wf_names[0]
+    if wf_sel not in wf_names:
+        wf_sel = st.session_state['wf_selected'] = wf_names[0]
     is_bi = dfil.is_builtin_workflow(wf_sel)
-
-    b1, b2, b3, _b4 = st.columns([1.3, 1, 1, 3])
-    b1.button('✎ Edit / Duplicate', key='wf_edit_btn', on_click=_wf_cb_edit,
-              help='built-ins open as an editable copy')
-    b2.button('＋ New', key='wf_new_btn', on_click=_wf_cb_new)
-    b3.button('🗑 Delete', key='wf_del_btn', on_click=_wf_cb_delete,
-              disabled=is_bi or wf_sel not in _saved,
-              help='saved workflows only')
+    if draft is None:
+        tw1, tw2, tw3, tw4, _tw5 = st.columns([3, 1.1, 0.7, 0.8, 1.6],
+                                              vertical_alignment='bottom')
+        wf_sel = tw1.selectbox('Workflow', wf_names, key='wf_selected')
+        is_bi = dfil.is_builtin_workflow(wf_sel)
+        tw2.button('✎ Edit / Duplicate', key='wf_edit_btn',
+                   on_click=_wf_cb_edit,
+                   help='built-ins open as an editable copy')
+        tw3.button('＋ New', key='wf_new_btn', on_click=_wf_cb_new)
+        tw4.button('🗑 Delete', key='wf_del_btn', on_click=_wf_cb_delete,
+                   disabled=is_bi or wf_sel not in _saved,
+                   help='saved workflows only')
+    else:
+        st.session_state.setdefault('wf_save_name', draft.get('name', ''))
+        with st.container(border=True):
+            ev1, ev2, ev3, _ev4 = st.columns([3, 1.1, 1, 1.4],
+                                             vertical_alignment='bottom')
+            ev1.text_input('✎ Editing — workflow name', key='wf_save_name')
+            ev2.button('💾 Save workflow', type='primary', key='wf_save_btn',
+                       on_click=_wf_cb_save)
+            ev3.button('Discard changes', key='wf_discard',
+                       on_click=_wf_cb_discard)
     _flash = st.session_state.pop('wf_flash', None)
     if _flash:
         st.success(_flash)
@@ -1680,7 +1854,7 @@ with tab_workflows:
     st.divider()
 
     # ---------------------------------------------------------- RUN VIEW ----
-    if wf_mode.startswith('▶'):
+    if draft is None:
         wf = dfil.load_workflow(wf_sel)
         if is_bi:
             st.caption('🔒 built-in — click **✎ Edit / Duplicate** to change '
@@ -1766,86 +1940,72 @@ with tab_workflows:
 
     # -------------------------------------------------------- BUILD VIEW ----
     else:
-        draft = st.session_state.get('wf_draft')
-        if draft is None:
-            st.info('Pick a workflow above and click **✎ Edit / Duplicate** '
-                    '(or **＋ New**) to start building.')
-        else:
-            if dfil.is_builtin_workflow(wf_sel) and draft.get('name') != wf_sel:
-                st.caption('✎ editing a **copy** of the built-in — it will be '
-                           'saved as a new workflow.')
-            st.markdown(f"**Editing:** `{draft.get('name', '?')}`  ·  "
-                        f"{len(draft['stages'])} stage(s)")
+        if dfil.is_builtin_workflow(wf_sel) and draft.get('name') != wf_sel:
+            st.caption('✎ editing a **copy** of the built-in — it will be '
+                       'saved as a new workflow.')
+        st.markdown(f"**{len(draft['stages'])} stage(s)**")
 
-            dbyname = {}
-            try:
-                dbyname = wf_engine.run_workflow(full, draft, IDX_MAP).by_name
-            except Exception as e:                              # noqa: BLE001
-                st.warning(f'draft not fully runnable yet: {e}')
+        dbyname = {}
+        try:
+            dbyname = wf_engine.run_workflow(full, draft, IDX_MAP).by_name
+        except Exception as e:                              # noqa: BLE001
+            st.warning(f'draft not fully runnable yet: {e}')
 
-            for i, stg in enumerate(draft['stages']):
-                r1, r2, r3 = st.columns([4, 1.4, 3])
-                fin = ' ★' if stg.get('focus_input') else ''
-                r1.markdown(f"**{i + 1}. {stg['name']}**{fin}")
-                r1.caption(_wf_md(f"from: {stg.get('source', 'universe')}"
-                             f"  ·  {wf_engine.stage_summary(stg)}"))
-                _sr = dbyname.get(stg['name'])
-                r2.markdown(f"`{_sr.n_in:,}→{_sr.n_out:,}`" if _sr else '`—`')
-                bc = r3.columns(5)
-                if bc[0].button('↑', key=f'wf_up_{i}', disabled=i == 0):
-                    draft['stages'][i - 1], draft['stages'][i] = \
-                        draft['stages'][i], draft['stages'][i - 1]
-                    st.session_state['wf_edit_idx'] = -1
-                    st.rerun()
-                if bc[1].button('↓', key=f'wf_dn_{i}',
-                                disabled=i == len(draft['stages']) - 1):
-                    draft['stages'][i + 1], draft['stages'][i] = \
-                        draft['stages'][i], draft['stages'][i + 1]
-                    st.session_state['wf_edit_idx'] = -1
-                    st.rerun()
-                if bc[2].button('✎', key=f'wf_edit_{i}',
-                                help='edit this stage'):
-                    st.session_state['wf_edit_idx'] = i
-                    st.session_state['wf_ed_nonce'] += 1
-                    st.rerun()
-                if bc[3].button('⧉', key=f'wf_dupe_{i}',
-                                help='duplicate this stage'):
-                    import copy as _copy
-                    ns = _copy.deepcopy(stg)
-                    ns['name'] = _wf_unique_stage_name(
-                        ns['name'] + ' copy', draft)
-                    ns['focus_input'] = False
-                    draft['stages'].insert(i + 1, ns)
-                    st.session_state['wf_edit_idx'] = -1
-                    st.rerun()
-                if bc[4].button('🗑', key=f'wf_dropstg_{i}',
-                                disabled=len(draft['stages']) == 1,
-                                help='delete this stage'):
-                    draft['stages'].pop(i)
-                    st.session_state['wf_edit_idx'] = -1
-                    st.rerun()
-                if st.session_state.get('wf_edit_idx') == i:
-                    _wf_stage_editor(draft, i)
-
-            if st.button('＋ Add stage', key='wf_add_stage'):
-                draft['stages'].append(
-                    {'name': _wf_unique_stage_name(
-                        f'Stage {len(draft["stages"]) + 1}', draft),
-                     'source': 'universe'})
-                st.session_state['wf_edit_idx'] = len(draft['stages']) - 1
+        for i, stg in enumerate(draft['stages']):
+            r1, r2, r3 = st.columns([4, 1.4, 3])
+            fin = ' ★' if stg.get('focus_input') else ''
+            r1.markdown(f"**{i + 1}. {stg['name']}**{fin}")
+            r1.caption(_wf_md(f"from: {stg.get('source', 'universe')}"
+                         f"  ·  {wf_engine.stage_summary(stg)}"))
+            _sr = dbyname.get(stg['name'])
+            r2.markdown(f"`{_sr.n_in:,}→{_sr.n_out:,}`" if _sr else '`—`')
+            bc = r3.columns(5)
+            if bc[0].button('↑', key=f'wf_up_{i}', disabled=i == 0):
+                draft['stages'][i - 1], draft['stages'][i] = \
+                    draft['stages'][i], draft['stages'][i - 1]
+                st.session_state['wf_edit_idx'] = -1
+                st.rerun()
+            if bc[1].button('↓', key=f'wf_dn_{i}',
+                            disabled=i == len(draft['stages']) - 1):
+                draft['stages'][i + 1], draft['stages'][i] = \
+                    draft['stages'][i], draft['stages'][i + 1]
+                st.session_state['wf_edit_idx'] = -1
+                st.rerun()
+            if bc[2].button('✎', key=f'wf_edit_{i}',
+                            help='edit this stage'):
+                st.session_state['wf_edit_idx'] = i
                 st.session_state['wf_ed_nonce'] += 1
                 st.rerun()
+            if bc[3].button('⧉', key=f'wf_dupe_{i}',
+                            help='duplicate this stage'):
+                import copy as _copy
+                ns = _copy.deepcopy(stg)
+                ns['name'] = _wf_unique_stage_name(
+                    ns['name'] + ' copy', draft)
+                ns['focus_input'] = False
+                draft['stages'].insert(i + 1, ns)
+                st.session_state['wf_edit_idx'] = -1
+                st.rerun()
+            if bc[4].button('🗑', key=f'wf_dropstg_{i}',
+                            disabled=len(draft['stages']) == 1,
+                            help='delete this stage'):
+                draft['stages'].pop(i)
+                st.session_state['wf_edit_idx'] = -1
+                st.rerun()
+            if st.session_state.get('wf_edit_idx') == i:
+                _wf_stage_editor(draft, i)
 
-            st.divider()
-            st.session_state.setdefault(
-                'wf_cl_edit', '\n'.join(draft.get('checklist', [])))
-            st.session_state.setdefault('wf_save_name', draft.get('name', ''))
-            st.text_area('Checklist — one item per line', key='wf_cl_edit',
-                         height=150)
+        if st.button('＋ Add stage', key='wf_add_stage'):
+            draft['stages'].append(
+                {'name': _wf_unique_stage_name(
+                    f'Stage {len(draft["stages"]) + 1}', draft),
+                 'source': 'universe'})
+            st.session_state['wf_edit_idx'] = len(draft['stages']) - 1
+            st.session_state['wf_ed_nonce'] += 1
+            st.rerun()
 
-            sv1, sv2, sv3 = st.columns([3, 1, 1])
-            sv1.text_input('Workflow name', key='wf_save_name')
-            sv2.button('💾 Save workflow', type='primary', key='wf_save_btn',
-                       on_click=_wf_cb_save)
-            sv3.button('Discard changes', key='wf_discard',
-                       on_click=_wf_cb_discard)
+        st.divider()
+        st.session_state.setdefault(
+            'wf_cl_edit', '\n'.join(draft.get('checklist', [])))
+        st.text_area('Checklist — one item per line', key='wf_cl_edit',
+                     height=150)

@@ -445,6 +445,87 @@ def load_screener(name: str) -> dict | None:
     return json.loads(path.read_text())
 
 
+# ------------------------------------------------------- combine screens ---
+# All-Results "Combine screens" row: presets and saved screeners are combined
+# at MASK level (each evaluated independently from the clean baseline), not
+# loaded into the widgets — one panel can't hold two conflicting presets.
+MY_SCREENER_PREFIX = 'My: '
+
+
+# Category -> presets, for the chip picker (StockCharts-Screener style).
+# A preset missing here still shows up, under 'Other'.
+PRESET_CATEGORIES = {
+    'Leaders': ['Minervini 8/8 (liquid)', 'CANSLIM C-A-I leaders',
+                'SCOOTER >= 90', 'CANTATA CE leaders',
+                'Leaders not extended (<= 2 ATR)'],
+    'Trend & stage': ['Weinstein 2A/2B not extended',
+                      'Large-cap uptrend pullback', 'Momentum Leader (Narrow)'],
+    'Tight / not extended': ['Tight consolidation (RTI)', 'TW: Tight and orderly',
+                             'TW: not extended', 'Golden Launch Pad'],
+    'Movers': ['Stockbee 20% Weekly Movers', 'Stockbee 4% Daily Gainers',
+               'Qullamaggie Suite'],
+    'Volume & accumulation': ['Stockbee 9M Movers', 'ADL Accumulation'],
+}
+
+
+def screen_categories() -> dict:
+    """Category -> screen labels: PRESET_CATEGORIES, 'Other' for uncategorised
+    presets, then 'My screeners' (saved, prefixed 'My: ') when any exist."""
+    cats = {c: [p for p in ps if p in PRESETS]
+            for c, ps in PRESET_CATEGORIES.items()}
+    placed = {p for ps in cats.values() for p in ps}
+    other = [p for p in PRESETS if p not in placed]
+    if other:
+        cats['Other'] = other
+    mine = [MY_SCREENER_PREFIX + n for n in saved_screeners()]
+    if mine:
+        cats['My screeners'] = mine
+    return {c: ps for c, ps in cats.items() if ps}
+
+
+def combinable_screens() -> list:
+    """Every pickable screen label, in category order."""
+    return [s for ps in screen_categories().values() for s in ps]
+
+
+def screen_spec(label: str) -> dict | None:
+    if label.startswith(MY_SCREENER_PREFIX):
+        return load_screener(label[len(MY_SCREENER_PREFIX):])
+    return PRESETS.get(label)
+
+
+def screen_mask(df: pd.DataFrame, spec: dict,
+                idx_map: dict | None = None) -> pd.Series:
+    """One preset / saved screener as a boolean mask (same logic as loading
+    it into the panel: threshold grid AND advanced panel)."""
+    return (build_mask(df, normalize_selections(spec.get('selections', {})))
+            & build_advanced_mask(df, spec.get('advanced', {}), idx_map))
+
+
+def combine_screens(df: pd.DataFrame, include: list, exclude: list,
+                    mode: str = 'all', idx_map: dict | None = None):
+    """(Include_1 AND/OR Include_2 ...) AND NOT (any Exclude).
+    Returns (mask, hits) — hits is a bool DataFrame, one column per Include
+    screen, for the matched_by / hits result columns. No Include screens =
+    all-True start (so Exclude alone still works)."""
+    hits = pd.DataFrame(index=df.index)
+    for lbl in include:
+        spec = screen_spec(lbl)
+        if spec is not None:
+            hits[lbl] = screen_mask(df, spec, idx_map)
+    if hits.shape[1] == 0:
+        mask = pd.Series(True, index=df.index)
+    elif mode == 'any':
+        mask = hits.any(axis=1)
+    else:
+        mask = hits.all(axis=1)
+    for lbl in exclude:
+        spec = screen_spec(lbl)
+        if spec is not None:
+            mask &= ~screen_mask(df, spec, idx_map)
+    return mask, hits
+
+
 def saved_screeners() -> list:
     if not MY_SCREENERS.exists():
         return []
