@@ -52,8 +52,10 @@ def _within_high():
 
 
 def _adr():
-    return [('All', None), ('> 3.3%', (3.3, None)), ('< 2%', (None, 2)),
-            ('2 - 5%', (2, 5)), ('5 - 10%', (5, 10)), ('10 - 20%', (10, 20)), ('> 20%', (20, None))]
+    # one-sided floors: an ADR ceiling rarely makes sense for momentum names
+    return [('All', None), ('> 3%', (3, None)), ('> 5%', (5, None)),
+            ('> 7%', (7, None)), ('> 10%', (10, None)), ('> 20%', (20, None)),
+            ('< 2%', (None, 2))]
 
 
 def _volume():
@@ -327,13 +329,13 @@ PRESETS = {
     # full multi-stage version). The 1M/3M/6M momentum UNION stage is not
     # expressible here (presets AND their selections) so it is left out.
     'TW: Tight and orderly': {
-        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3.3%',
+        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3%',
                        'adv': '> $1M', 'vs50': '> 0%', 'vs200': '> 0%'},
         'advanced': {'adv_stages': ['2A', '2B'], 'adv_rti_zone': ['1', '2'],
                      'adv_gold_launch_pad': True},
     },
     'TW: not extended': {
-        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3.3%',
+        'selections': {'price': ('custom', 3.0, 1000.0), 'adr': '> 3%',
                        'adv': '> $1M', 'vs50': '> 0%', 'vs200': '> 0%'},
         'advanced': {'adv_stages': ['2A', '2B'], 'adv_rti_zone': ['1', '2'],
                      'adv_gold_launch_pad': True, 'adv_max_ext21': 3.0,

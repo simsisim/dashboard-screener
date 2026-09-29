@@ -76,6 +76,18 @@ def main(argv=None):
     close = data['close']
     latest = close.index.max()
     print(f'evaluating at latest bar: {latest:%Y-%m-%d}')
+    holes = data_loader.check_missing_days(data)
+    if holes:
+        print('\n' + '!' * 72)
+        print('WARNING: daily bars missing in the last 60 sessions — every '
+              'rolling indicator')
+        print('over these days is NaN (50d columns empty for ~50 sessions):')
+        for day, n_missing, n_live in holes:
+            print(f'  {day:%Y-%m-%d}: {n_missing} of {n_live} tickers '
+                  f'({n_missing / n_live:.0%}) have no bar')
+        print('Fix in downloadData_v1 (main.py --repair-from DATE), then '
+              're-run.')
+        print('!' * 72 + '\n')
 
     # ---------- dashboard context metrics ----------
     print('computing dashboard context (MAs, 52w, momentum, RS)...')

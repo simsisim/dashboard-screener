@@ -151,7 +151,8 @@ TABS = {
 # the Screener filters. Re-assigning each value to itself turns it into
 # plain session state, which survives. Buttons, uploads, downloads and table
 # selections can't be written via session_state, so they are skipped.
-_NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'lists_uploader',
+_NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
+               'lists_uploader',
                'ts_run', 'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
                'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
@@ -278,7 +279,8 @@ def _reset_filters():
     for k, default in dfil.ADVANCED_DEFAULTS.items():
         st.session_state[k] = default
     for k in [k for k in st.session_state
-              if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
+              if str(k).startswith(('comb_inc_', 'comb_exc_',
+                                    'comb2_inc_', 'comb2_exc_'))]:
         st.session_state[k] = []
     for k, default in {'search': '', 'my_list_sel': '— None Selected —',
                        'apply_upload': False,
@@ -287,7 +289,8 @@ def _reset_filters():
                        '_applied_preset': '— None Selected —',
                        '_applied_screener': '— None Selected —',
                        'save_as_name': '', 'save_list_name': '',
-                       'comb_mode': 'All (AND)',
+                       'comb_mode': 'All (AND)', 'comb2_mode': 'All (AND)',
+                       'comb_levels': 'Funnel',
                        '_flash': ''}.items():
         st.session_state[k] = default
 
@@ -297,8 +300,12 @@ _init_filter_state()
 if ACTIVE_TAB == 'all':
     _how_built('ℹ️ How the Screener is built', [
         _universe_line(),
-        'Every screen, preset and filter below narrows this universe; the '
-        'Combine step and the Filters panel are ANDed together',
+        'Every screen, preset and filter below narrows this universe. '
+        'Combine level 2 is optional: in <b>Funnel</b> mode it only screens '
+        'level 1’s survivors (level 1 AND level 2 — e.g. leaders with All '
+        '(AND), then Tight / not-extended with Any (OR)); in <b>Merge</b> mode '
+        'both levels screen the whole universe and are joined (level 1 OR '
+        'level 2). The Filters panel is ANDed on top of the result',
     ])
     # ---------------- top bar: Presets | Lists | My Screener | My Lists ----
     tb1, tb2, tb3, tb4 = st.columns(4)
@@ -381,72 +388,126 @@ if ACTIVE_TAB == 'all':
 
     # ------------------ combine screens (mask-level AND / OR / NOT) -------
     st.subheader('Combine screens')
-    # chip picker like the StockCharts Screener: one 'comb_inc_<category>' /
-    # 'comb_exc_<category>' pills widget per category; the Include / Exclude
-    # sets are the union over categories (hidden categories' picks survive
-    # via the tab-bar state carry-forward at the top of the script)
     _cats = dfil.screen_categories()
-    for _k in [k for k in st.session_state
-               if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
-        _ok = _cats.get(_k[9:], [])            # drop deleted screeners
-        st.session_state[_k] = [x for x in (st.session_state[_k] or [])
-                                if x in _ok]
-    if st.session_state.get('comb_cat') not in _cats:
-        st.session_state['comb_cat'] = next(iter(_cats))
-    st.session_state.setdefault('comb_pick_as', 'Include')
-    comb_include = [x for c in _cats
-                    for x in st.session_state.get(f'comb_inc_{c}') or []]
-    comb_exclude = [x for c in _cats
-                    for x in st.session_state.get(f'comb_exc_{c}') or []]
+    st.session_state.setdefault('comb_levels', 'Funnel')
+    comb_levels = st.radio(
+        'Connect level 1 and level 2', ['Funnel', 'Merge'], key='comb_levels',
+        horizontal=True,
+        help='Funnel: level 2 only screens the tickers that survived level 1 '
+             '(level 1 AND level 2). Merge: both levels screen the whole '
+             'universe and their results are joined (level 1 OR level 2).')
 
-    st.markdown('**1&nbsp;&nbsp;Pick screens**')
-    with st.container(border=True):
-        pc1, pc2 = st.columns([1, 2])
-        with pc1:
-            comb_cat = st.pills('Category', list(_cats), key='comb_cat',
-                                selection_mode='single') or next(iter(_cats))
-            pick_as = st.segmented_control(
-                'Clicking a screen adds it to', ['Include', 'Exclude (NOT)'],
-                key='comb_pick_as') or 'Include'
-        with pc2:
-            _pref = 'comb_inc_' if pick_as == 'Include' else 'comb_exc_'
-            st.pills(f'Screens in {comb_cat}'
-                     + ('' if pick_as == 'Include' else ' — excluding'),
-                     _cats[comb_cat], selection_mode='multi',
-                     key=_pref + comb_cat,
-                     help="Ioa's presets and your saved screeners ('My: …'), "
-                          'each evaluated on its own. Click again to remove.')
-
-    def _clear_combine():
+    def _combine_level(p: str, n_pick: int, n_comb: int, level_label: str,
+                       within: pd.Series | None = None):
+        """One Pick + Combine block; `p` is the session-state key prefix
+        ('comb' = level 1, 'comb2' = level 2). `within` (level 1's result,
+        Funnel mode) restricts the mask AND every per-screen count to the
+        tickers that survived the previous level. Chip picker like the
+        StockCharts Screener: one '<p>_inc_<category>' / '<p>_exc_<category>'
+        pills widget per category; the Include / Exclude sets are the union
+        over categories (hidden categories' picks survive via the tab-bar
+        state carry-forward at the top of the script)."""
+        inc_p, exc_p = f'{p}_inc_', f'{p}_exc_'
         for _k in [k for k in st.session_state
-                   if str(k).startswith(('comb_inc_', 'comb_exc_'))]:
-            st.session_state[_k] = []
+                   if str(k).startswith((inc_p, exc_p))]:
+            _ok = _cats.get(_k[len(inc_p):], [])      # drop deleted screeners
+            st.session_state[_k] = [x for x in (st.session_state[_k] or [])
+                                    if x in _ok]
+        if st.session_state.get(f'{p}_cat') not in _cats:
+            st.session_state[f'{p}_cat'] = next(iter(_cats))
+        st.session_state.setdefault(f'{p}_pick_as', 'Include')
+        include = [x for c in _cats
+                   for x in st.session_state.get(inc_p + c) or []]
+        exclude = [x for c in _cats
+                   for x in st.session_state.get(exc_p + c) or []]
 
-    comb_mode = st.session_state.get('comb_mode', 'All (AND)')
-    comb_mask, comb_hits = dfil.combine_screens(
-        full, comb_include, comb_exclude,
-        'any' if comb_mode.startswith('Any') else 'all', IDX_MAP)
-    st.markdown('**2&nbsp;&nbsp;Combine**')
-    with st.container(border=True):
-        if not (comb_include or comb_exclude):
-            st.caption('No screens picked yet — pick one or more above. '
-                       'The Filters panel below is ANDed on top of the result.')
+        st.markdown(f'**{n_pick}&nbsp;&nbsp;Pick screens{level_label}**')
+        with st.container(border=True):
+            pc1, pc2 = st.columns([1, 2])
+            with pc1:
+                cat = st.pills('Category', list(_cats), key=f'{p}_cat',
+                               selection_mode='single') or next(iter(_cats))
+                pick_as = st.segmented_control(
+                    'Clicking a screen adds it to', ['Include', 'Exclude (NOT)'],
+                    key=f'{p}_pick_as') or 'Include'
+            with pc2:
+                _pref = inc_p if pick_as == 'Include' else exc_p
+                st.pills(f'Screens in {cat}'
+                         + ('' if pick_as == 'Include' else ' — excluding'),
+                         _cats[cat], selection_mode='multi',
+                         key=_pref + cat,
+                         help="Ioa's presets and your saved screeners ('My: …'), "
+                              'each evaluated on its own. Click again to remove.')
+
+        def _clear():
+            for _k in [k for k in st.session_state
+                       if str(k).startswith((inc_p, exc_p))]:
+                st.session_state[_k] = []
+
+        mode = st.session_state.get(f'{p}_mode', 'All (AND)')
+        m, hits = dfil.combine_screens(
+            full, include, exclude,
+            'any' if mode.startswith('Any') else 'all', IDX_MAP)
+        # pin both to full.index as plain bools, so the funnel AND and the
+        # Merge OR below never align two differently ordered indexes
+        m = m.reindex(full.index, fill_value=False).astype(bool)
+        hits = hits.reindex(full.index, fill_value=False).astype(bool)
+        if within is not None:
+            w = within.reindex(full.index, fill_value=False).to_numpy(dtype=bool)
+            m = m & w
+            hits = pd.DataFrame(hits.to_numpy(dtype=bool) & w[:, None],
+                                index=hits.index, columns=hits.columns)
+        st.markdown(f'**{n_comb}&nbsp;&nbsp;Combine{level_label}**')
+        with st.container(border=True):
+            if not (include or exclude):
+                st.caption('No screens picked yet — pick one or more above. '
+                           'The Filters panel below is ANDed on top of the result.')
+            else:
+                cc1, cc2 = st.columns([4, 1])
+                with cc2:
+                    st.radio('Match', ['All (AND)', 'Any (OR)'], key=f'{p}_mode',
+                             disabled=len(include) < 2)
+                with cc1:
+                    _join = ' · AND · ' if mode.startswith('All') else ' · OR · '
+                    _expr = _join.join(
+                        f'`{c}` ({int(hits[c].sum())})' for c in hits)
+                    if exclude:
+                        _expr += ((' · ' if _expr else '')
+                                  + ' · '.join(f'NOT `{c}`' for c in exclude))
+                    st.markdown(_expr)
+                    st.markdown(f'→ **{int(m.sum())}** tickers')
+                    st.button('Clear all screens', key=f'{p}_clear',
+                              on_click=_clear)
+        return m, hits, bool(include or exclude)
+
+    comb_mask, comb_hits, _lvl1_on = _combine_level('comb', 1, 2, '')
+    # Funnel: level 2 screens only level 1's survivors (e.g. leaders
+    # intersected, then Tight OR not-extended within them). Merge: both
+    # levels screen the whole universe and the results are ORed.
+    _funnel = comb_levels == 'Funnel'
+    _within = comb_mask if (_funnel and _lvl1_on) else None
+    if _within is not None:
+        _l2_label = f' — within the {int(comb_mask.sum())} tickers from level 1'
+    else:
+        _l2_label = ' — level 2' + ('' if _funnel else ' (merged with level 1)')
+    comb2_mask, comb2_hits, _lvl2_on = _combine_level(
+        'comb2', 3, 4, _l2_label, within=_within)
+    if _lvl2_on:
+        if not _lvl1_on:
+            comb_mask = comb2_mask         # an empty level 1 is all-True
+        elif _funnel:
+            comb_mask = comb2_mask         # already restricted to level 1
         else:
-            cc1, cc2 = st.columns([4, 1])
-            with cc2:
-                st.radio('Match', ['All (AND)', 'Any (OR)'], key='comb_mode',
-                         disabled=len(comb_include) < 2)
-            with cc1:
-                _join = ' · AND · ' if comb_mode.startswith('All') else ' · OR · '
-                _expr = _join.join(
-                    f'`{c}` ({int(comb_hits[c].sum())})' for c in comb_hits)
-                if comb_exclude:
-                    _expr += ((' · ' if _expr else '')
-                              + ' · '.join(f'NOT `{c}`' for c in comb_exclude))
-                st.markdown(_expr)
-                st.markdown(f'→ **{int(comb_mask.sum())}** tickers')
-                st.button('Clear all screens', key='comb_clear',
-                          on_click=_clear_combine)
+            comb_mask = comb_mask | comb2_mask
+        # a screen picked in both levels has the same mask — keep one column
+        comb_hits = pd.concat(
+            [comb_hits, comb2_hits.loc[:, ~comb2_hits.columns.isin(comb_hits.columns)]],
+            axis=1)
+        if _lvl1_on:
+            _op = 'AND' if _funnel else 'OR'
+            st.markdown(f'**Combine 1 {_op} Combine 2** → '
+                        f'**{int(comb_mask.sum())}** tickers '
+                        '(before the Filters panel)')
     st.divider()
 
     # --------------------------- filter rows (sketch rows 1-4) ------------

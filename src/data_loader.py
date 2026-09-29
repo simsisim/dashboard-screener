@@ -155,6 +155,50 @@ def load_price_matrices(tickers: list, use_batch: bool = True,
             'missing': missing, 'short': short}
 
 
+def _recent_sessions(latest: pd.Timestamp, index: pd.DatetimeIndex,
+                     lookback: int) -> pd.DatetimeIndex:
+    """Last `lookback` NYSE sessions up to `latest`; falls back to the
+    loaded dates when pandas_market_calendars isn't installed (then a day
+    missing for EVERY ticker can't be seen, only partial holes)."""
+    try:
+        import pandas_market_calendars as mcal
+        start = latest - pd.Timedelta(days=int(lookback * 1.6) + 10)
+        days = mcal.get_calendar('NYSE').valid_days(start, latest)
+        days = pd.DatetimeIndex(days).tz_localize(None).normalize()
+    except Exception:
+        days = index[index <= latest]
+    return days[-lookback:]
+
+
+def check_missing_days(data: dict, lookback: int = 60,
+                       max_missing_frac: float = 0.2) -> list:
+    """
+    Sessions in the last `lookback` bars where more than `max_missing_frac`
+    of the tickers trading then (first bar <= day <= last bar) have no close.
+    One such hole NaNs every rolling window over it (50d indicators for ~50
+    sessions) — the 2026-09-22 / 08-11 gap emptied ~95% of rti/adv50/ADR.
+    Returns [(date, n_missing, n_live)], oldest first.
+    """
+    close, meta = data['close'], data['meta']
+    if close.empty or not meta:
+        return []
+    spans = pd.DataFrame(meta).T
+    first = pd.to_datetime(spans['first'])
+    last = pd.to_datetime(spans['last'])
+    holes = []
+    for day in _recent_sessions(close.index.max(), close.index, lookback):
+        live = spans.index[(first <= day) & (last >= day)]
+        if not len(live):
+            continue
+        if day in close.index:
+            n_missing = int(close.loc[day, live].isna().sum())
+        else:
+            n_missing = len(live)
+        if n_missing / len(live) > max_missing_frac:
+            holes.append((day, n_missing, len(live)))
+    return holes
+
+
 def load_financial_data() -> pd.DataFrame:
     """CANSLIM fundamentals snapshot (financial_data_0_8.csv), ticker-indexed."""
     df = pd.read_csv(config.FIN_DATA_CSV, low_memory=False)

@@ -422,7 +422,7 @@ WORKFLOWS = {
         'stages': [
             {'name': 'Universe', 'source': 'universe',
              'selections': {'price': ('custom', 3.0, 1000.0),
-                            'adr': ('custom', 3.0, 60.0),
+                            'adr': '> 3%',
                             'adv': '> $1M',
                             'vs50': '> 0%', 'vs200': '> 0%'},
              'advanced': {'adv_stages': ['2A', '2B']},

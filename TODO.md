@@ -11,14 +11,13 @@ files are missing **2026-09-22** (97% of tickers) and **2026-08-11** (32%);
 any rolling window over the hole is NaN for ~50 sessions. Every preset,
 the Focus List and the Workflows are affected, not just "tight".
 
-- [ ] Backfill in downloadData_v1 — runbook in `../downloadData_v1/to_do.md`
-      ("Backfill missing daily bars").
-- [ ] Re-run `python3 run_screeners.py`, then check coverage: those columns
-      should have values for ~3,700+ tickers again.
-- [ ] Add a missing-day guard to `run_screeners.py` (after
-      `data_loader.load_price_matrices`): warn loudly when a date in the last
-      ~60 bars is missing for more than ~20% of tickers, so a hole can't
-      silently empty the columns again.
+- [x] Backfill in downloadData_v1 — DONE 2026-09-28 there (08-11 in 4,148,
+      09-22 in 4,138 of 4,164 files); downloadData now has its own gap check.
+- [x] Re-run `python3 run_screeners.py` — DONE 2026-09-28 (results/2026-09-28):
+      rti/adv50/pct_vs_50sma/adr20/ext_50sma_atr 3,931 of 3,961, pct_vs_200sma 3,692.
+- [x] Missing-day guard — DONE 2026-09-28: `data_loader.check_missing_days`
+      (NYSE sessions, last 60, > 20% of live tickers without a bar) → loud
+      WARNING block in `run_screeners.py` after loading.
 
 Note: `data_loader.py` only appends batch rows *after* a ticker's last
 per-ticker bar (`b[b.index > tail_from]`), so a batch file for a past date

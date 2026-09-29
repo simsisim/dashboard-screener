@@ -307,24 +307,24 @@ def main():
           not _bam_bad, '; '.join(_bam_bad[:3]) or f'{len(dfil.PRESETS)} presets')
 
     _w1 = {'stages': [{'name': 'A', 'source': 'universe',
-                       'selections': {'adr': '5 - 10%'}}]}
+                       'selections': {'adr': '> 5%'}}]}
     _r1 = wf_mod.run_workflow(res, _w1)
     _direct = res[dfil.build_mask(res, dfil.normalize_selections(
-        {'adr': '5 - 10%'}))]
+        {'adr': '> 5%'}))]
     _w2 = {'stages': [
-        {'name': 'A', 'source': 'universe', 'selections': {'adr': '5 - 10%'}},
+        {'name': 'A', 'source': 'universe', 'selections': {'adr': '> 5%'}},
         {'name': 'B', 'source': 'A', 'selections': {'vs200': '> 0%'}}]}
     _r2 = wf_mod.run_workflow(res, _w2)
     _combined = res[dfil.build_mask(res, dfil.normalize_selections(
-        {'adr': '5 - 10%', 'vs200': '> 0%'}))]
+        {'adr': '> 5%', 'vs200': '> 0%'}))]
     # source order-independence: two 'universe'-sourced stages yield the same
     # rows regardless of their relative order
     _w3a = {'stages': [
-        {'name': 'X', 'source': 'universe', 'selections': {'adr': '5 - 10%'}},
+        {'name': 'X', 'source': 'universe', 'selections': {'adr': '> 5%'}},
         {'name': 'Y', 'source': 'universe', 'selections': {'vs200': '> 0%'}}]}
     _w3b = {'stages': [
         {'name': 'Y', 'source': 'universe', 'selections': {'vs200': '> 0%'}},
-        {'name': 'X', 'source': 'universe', 'selections': {'adr': '5 - 10%'}}]}
+        {'name': 'X', 'source': 'universe', 'selections': {'adr': '> 5%'}}]}
     check('run_workflow: single==build_mask, chain==combined, order-independent',
           set(_r1.focus.index) == set(_direct.index)
           and set(_r2.focus.index) == set(_combined.index)
