@@ -101,6 +101,15 @@ THRESHOLD_FAMILIES = {
     'above_low': [('All', None), ('> 20%', (20, None)), ('> 30%', (30, None)),
                   ('> 50%', (50, None)), ('> 100%', (100, None)),
                   ('> 200%', (200, None))],
+    # trading bars since an event (0 = the latest bar) — HVE volume records
+    # close vs the 21dma-structure band, % (0 = inside) — ma_structure.py
+    'band_dist': [('All', None), ('inside band', (0, 0)),
+                  ('±2% (pullback window)', (-2, 2)), ('0 to +2%', (0, 2)),
+                  ('-2% to 0 (undercut)', (-2, 0)), ('±1%', (-1, 1)),
+                  ('> +2% (extended)', (2.0001, None))],
+    'bars_since': [('All', None), ('latest bar', (0, 0)), ('≤ 5 bars', (0, 5)),
+                   ('≤ 20 bars', (0, 20)), ('≤ 50 bars', (0, 50)),
+                   ('> 50 bars', (51, None))],
 }
 
 # slider bounds per family (for the "Custom…" reveal)
@@ -112,6 +121,8 @@ CUSTOM_RANGE = {
     'vroc': (-200.0, 500.0, 5.0), 'mfi': (0.0, 100.0, 1.0),
     'adx': (0.0, 60.0, 1.0), 'rsi': (0.0, 100.0, 1.0),
     'above_low': (0.0, 500.0, 5.0),
+    'bars_since': (0.0, 1700.0, 1.0),
+    'band_dist': (-20.0, 50.0, 0.5),
 }
 
 # ----------------------------------------------------------------- filters --
@@ -141,6 +152,14 @@ FILTER_SPECS = [
     ('adtv', '50d Avg Daily Volume (shares)', 'adtv_50', 'volume'),
     ('mfi', 'MFI 14', 'mfi14', 'mfi'),
     ('adx', 'ADX 13 (trend strength)', 'adx13', 'adx'),
+    # 21dma-structure (src/focus/ma_structure.py)
+    ('ma21s_dist', 'Close vs 21dma-structure band %', 'ma21s_dist_pct',
+     'band_dist'),
+    # HVE volume records (src/focus/volume_records.py)
+    ('hve_since', 'Bars since HVE (highest volume ever)', 'hve_bars_since',
+     'bars_since'),
+    ('hv1y_since', 'Bars since HV1Y (1-year volume high)', 'hv1y_bars_since',
+     'bars_since'),
 ]
 SPEC_BY_KEY = {k: (label, col, fam) for k, label, col, fam in FILTER_SPECS}
 
@@ -207,6 +226,7 @@ ADVANCED_FLAG_KEYS = (
     'adv_gold_launch_pad', 'adv_qullamaggie', 'adv_volume_anomaly',
     'adv_adl_accumulation', 'adv_52w_high_breakout', 'adv_52w_low_breakdown',
     'adv_ema20_pullback', 'adv_downtrend_reversal', 'adv_cantata',
+    'adv_21dma_pullback',
 )
 
 
@@ -258,6 +278,10 @@ def build_advanced_mask(df: pd.DataFrame, advanced: dict,
             mask &= df[f'in_{_flag[4:]}'].fillna(False).astype(bool)
     if a.get('adv_ce_min', 0.0) > 0 and 'ce_score' in df.columns:
         mask &= df['ce_score'].fillna(0) >= a['adv_ce_min']
+    if a.get('adv_ma21s_zone') and 'ma21s_zone' in df.columns:
+        mask &= df['ma21s_zone'].isin(a['adv_ma21s_zone'])
+    if a.get('adv_ma21s_trend') and 'ma21s_trend' in df.columns:
+        mask &= df['ma21s_trend'].isin(a['adv_ma21s_trend'])
     if a.get('adv_gmma_state'):
         mask &= df['gmma_state'].isin(a['adv_gmma_state'])
     if a['adv_exchange']:
@@ -381,6 +405,20 @@ PRESETS = {
         'selections': {},
         'advanced': {'adv_adl_accumulation': True},
     },
+    # PrimeTrading 21dma-structure (TV script v7.3): trend up (all three
+    # EMA21 high/close/low rising, script's memory rule) + close within
+    # +-2% of the band — a "look at the chart" list, not an entry signal
+    '21dma-structure pullback': {
+        'selections': {},
+        'advanced': {'adv_21dma_pullback': True},
+    },
+    # after metaVolume scripts/build_tw_watchlist.py (HVE in the last 50
+    # days, caps >= $300M) — but in trading bars, not calendar days
+    'HVE last 50 bars': {
+        'selections': {'hve_since': '≤ 50 bars',
+                       'mktcap': '> $300M (small+)'},
+        'advanced': {},
+    },
 }
 
 
@@ -426,6 +464,9 @@ ADVANCED_DEFAULTS = {
     'adv_ema20_pullback': False,
     'adv_downtrend_reversal': False,
     'adv_cantata': False,
+    'adv_21dma_pullback': False,
+    'adv_ma21s_zone': [],
+    'adv_ma21s_trend': [],
     'adv_ce_min': 0.0,
 }
 
@@ -461,12 +502,14 @@ PRESET_CATEGORIES = {
                 'SCOOTER >= 90', 'CANTATA CE leaders',
                 'Leaders not extended (<= 2 ATR)'],
     'Trend & stage': ['Weinstein 2A/2B not extended',
-                      'Large-cap uptrend pullback', 'Momentum Leader (Narrow)'],
+                      'Large-cap uptrend pullback', 'Momentum Leader (Narrow)',
+                      '21dma-structure pullback'],
     'Tight / not extended': ['Tight consolidation (RTI)', 'TW: Tight and orderly',
                              'TW: not extended', 'Golden Launch Pad'],
     'Movers': ['Stockbee 20% Weekly Movers', 'Stockbee 4% Daily Gainers',
                'Qullamaggie Suite'],
-    'Volume & accumulation': ['Stockbee 9M Movers', 'ADL Accumulation'],
+    'Volume & accumulation': ['Stockbee 9M Movers', 'ADL Accumulation',
+                              'HVE last 50 bars'],
 }
 
 

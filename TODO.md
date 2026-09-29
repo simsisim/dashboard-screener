@@ -64,6 +64,21 @@ leaders, never to the whole universe.
       Patterns, Workflows, Ticker detail) — helpers `_how_built` /
       `_universe_line` in dashboard.py.
 - [ ] Save "Combine screens" selections as a named screener.
+- [ ] 21dma-structure pullback: if the fixed ±2% window is noisy on
+      volatile names, add an ATR-based window (e.g. ±0.5 ATR) — agreed to
+      start with % (config.MA21S_PULLBACK_PCT).
 - [ ] Open a PR `workflows-tab` → `main` (branch pushed, commit 2edfbc0).
 - [ ] Uncommitted, not from this work — decide: `results/` cache changes
       (~20k files), `src/patterns/glb_chart.py`, `watchlists/`.
+
+## 5. Volume Records tab (metaVolume integration)
+
+- [ ] Filters: bring the Screener tab's full Filters panel into 3 Filters
+      (today: a short tab-specific set — market cap, price, ADV, vs prior,
+      index, sector, exclude funds). Needs its own session-key prefix: the
+      Screener's `sel_*` widgets would otherwise change both tabs at once.
+- [ ] Next screens: HVD top-N ranks (metaVolume's HVD file is date-sorted,
+      not volume-sorted — re-sort on import), then maybe volume anomaly /
+      Stockbee 9M as chips in 1 Pick screens.
+- [x] `volume_records/`: baseline committed, ledger gitignored (rebuilt
+      every run) — decided 2026-09-29.

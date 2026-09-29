@@ -1069,6 +1069,84 @@ print(json.dumps(out))
           bool((mine_rev == _m_rev).all()),
           f'n_match={int(mine_rev.sum())}/{len(mine_rev)}')
 
+    # 15. HVE volume records: vectorized ledger == a literal per-date loop of
+    # metaVolume's vol_daily_checker.check_and_update_hve over the same bars
+    from src.focus import volume_records as vr
+    hve_tk = ['AAPL', 'NVDA', 'KOD', 'NAD', 'NUV', 'BEAG', 'MNST', 'BRK.A']
+    hve_data = data_loader.load_price_matrices(hve_tk, verbose=False)
+    hve_out, hve_ev, hve_info = vr.evaluate(hve_data['volume'], hve_data['close'])
+    _rec, _cut = vr.load_baseline()
+    _top = _rec[_rec['n'] == 1].set_index('Symbol')['volume']
+    _ok = hve_out.index[hve_out['hve_status'] == 'ok']
+    loop_ev = []
+    for t in _ok:
+        prior = [_top[vr._baseline_symbol(t, set(_top.index))]]
+        for d, v in hve_data['volume'][t].loc[lambda s: s.index > _cut].items():
+            if pd.notna(v) and v > max(prior):
+                loop_ev.append((t, d))
+                prior.append(v)
+    mine_ev = list(zip(hve_ev['ticker'], hve_ev['date']))
+    check('HVE: vectorized ledger == metaVolume per-date loop',
+          sorted(mine_ev) == sorted(loop_ev),
+          f'{len(mine_ev)} events vs {len(loop_ev)}, {len(_ok)} ok tickers')
+    check('HVE: BRK.A maps to baseline BRK-A',
+          hve_out.loc['BRK.A', 'hve_status'] != 'no_baseline',
+          hve_out.loc['BRK.A', 'hve_status'])
+    check('HVE: MNST (volume re-adjusted 2x) is baseline_mismatch',
+          hve_out.loc['MNST', 'hve_status'] == 'baseline_mismatch',
+          hve_out.loc['MNST', 'hve_status'])
+    # synthetic: 2x the record on the latest bar must be a record at bar 0
+    _v2 = hve_data['volume'].copy()
+    _v2.loc[_v2.index[-1], 'AAPL'] = hve_out.loc['AAPL', 'hve_volume'] * 2
+    _o2, _e2, _ = vr.evaluate(_v2)
+    check('HVE: synthetic 2x record on latest bar flags',
+          _o2.loc['AAPL', 'hve_bars_since'] == 0
+          and _o2.loc['AAPL', 'hve_count_50'] >= 1,
+          f'bars_since={_o2.loc["AAPL", "hve_bars_since"]}')
+    # HV1Y: vectorized == per-ticker idxmax of the trailing window
+    _h1 = vr.evaluate_hv1y(hve_data['volume'])
+    _bad = []
+    for t in hve_tk:
+        _s = hve_data['volume'][t]
+        if _s.notna().sum() < config.HV1Y_BARS:
+            continue
+        _w = _s.tail(config.HV1Y_BARS)
+        if (_h1.loc[t, 'hv1y_date'] != f'{_w.idxmax():%Y-%m-%d}'
+                or _h1.loc[t, 'hv1y_volume'] != _w.max()):
+            _bad.append(t)
+    check('HV1Y: vectorized == per-ticker trailing-window max', not _bad,
+          f'mismatches: {_bad}')
+
+    # 16. 21dma-structure: vectorized == a bar-by-bar replay of the Pine
+    # script (EMA21 of high/close/low, trend memory, band distance)
+    from src.focus import ma_structure as ms_mod
+    ms_tk = ['AAPL', 'NVDA', 'MSFT', 'JPM', 'XOM', 'TSLA', 'PLTR', 'HOOD']
+    ms_data = data_loader.load_price_matrices(ms_tk, verbose=False)
+    ms_out = ms_mod.evaluate(ms_data['high'], ms_data['low'], ms_data['close'])
+    _alpha, _bad = 2 / (config.MA21S_LENGTH + 1), []
+    for t in ms_tk:
+        _h, _l, _c = (ms_data[k][t].dropna() for k in ('high', 'low', 'close'))
+        eh, el, ec, trend = _h.iloc[0], _l.iloc[0], _c.iloc[0], 'up'
+        for i in range(1, len(_c)):
+            nh = _alpha * _h.iloc[i] + (1 - _alpha) * eh
+            nl = _alpha * _l.iloc[i] + (1 - _alpha) * el
+            nc = _alpha * _c.iloc[i] + (1 - _alpha) * ec
+            if nh > eh and nc > ec and nl > el:
+                trend = 'up'
+            elif nh < eh and nc < ec and nl < el:
+                trend = 'down'
+            eh, el, ec = nh, nl, nc
+        cl = _c.iloc[-1]
+        dist = (0.0 if el <= cl <= eh
+                else (cl / eh - 1) * 100 if cl > eh else (cl / el - 1) * 100)
+        pb = trend == 'up' and abs(round(dist, 2)) <= config.MA21S_PULLBACK_PCT
+        r = ms_out.loc[t]
+        if (r['ma21s_trend'] != trend or abs(r['ma21s_dist_pct'] - dist) > 0.011
+                or bool(r['in_21dma_pullback']) != pb):
+            _bad.append(t)
+    check('21dma-structure: vectorized == bar-by-bar Pine replay', not _bad,
+          f'mismatches: {_bad}')
+
     print()
     ok_all = True
     for status, name, detail in results:

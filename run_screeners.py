@@ -27,8 +27,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config
 from src import combine, data_loader, indicators, report
-from src.focus import atr_extension, rti, stages, volume_adx, \
-    volume_anomaly
+from src.focus import atr_extension, ma_structure, rti, stages, \
+    volume_adx, volume_anomaly, volume_records
 from src.leaders import adl_accumulation, canslim, cantata, \
     downtrend_reversal, ema20_pullback, gmma, gold_launch_pad, minervini, \
     qullamaggie, scooter, stockbee_movers
@@ -186,6 +186,10 @@ def main(argv=None):
         ext_df = atr_extension.evaluate(data['high'], data['low'], close, data['volume'])
         print('focus c) Weinstein stages...')
         stg_df = stages.evaluate(close)
+        print('focus h) 21dma-structure pullback...')
+        ma21s_df = ma_structure.evaluate(data['high'], data['low'], close)
+        print(f'  -> pullback={int(ma21s_df["in_21dma_pullback"].sum())} '
+              f'| zones {ma21s_df.loc[ma21s_df["in_21dma_pullback"], "ma21s_zone"].value_counts().to_dict()}')
         print('focus d) RTI...')
         rti_df = rti.evaluate(data['high'], data['low'], close)
         print('leaders d) Stockbee Movers (9M / weekly / daily gainers)...')
@@ -215,6 +219,18 @@ def main(argv=None):
         print('focus f) volume anomaly (3-sigma spike)...')
         van_df = volume_anomaly.evaluate(data['volume'])
         print(f'  -> anomaly={int(van_df["in_volume_anomaly"].sum())}')
+        print('focus g) HVE + HV1Y volume records (baseline + ledger since cutoff)...')
+        hve_df, hve_events, hve_info = volume_records.evaluate(data['volume'],
+                                                               close)
+        if args.limit is None:        # a partial universe must not clobber it
+            volume_records.write_ledger(hve_events, hve_info)
+        hv1y_df = volume_records.evaluate_hv1y(data['volume'])
+        print(f'  -> HV1Y on the latest bar: '
+              f'{int((hv1y_df["hv1y_bars_since"] == 0).sum())}')
+        print(f'  -> cutoff {hve_info["baseline_cutoff"]}, '
+              f'{hve_info["bars_after_cutoff"]} bars after, '
+              f'{hve_info["events"]} new records | '
+              f'status {hve_info["status_counts"]}')
         print('leaders i) EMA20 pullback + Downtrend reversal...')
         ema20_df = ema20_pullback.evaluate(close, data['open'],
                                            data['low'], sco_df['scooter_score'])
@@ -227,8 +243,8 @@ def main(argv=None):
                                            data['volume'])
         print(f'  -> adl={int(adl_df["in_adl_accumulation"].sum())}')
 
-        full = ctx.join([ext_df, stg_df, rti_df, stb_df, glp_df, vadx_df,
-                         gmma_df, qulla_df, van_df, adl_df, ema20_df,
+        full = ctx.join([ext_df, stg_df, ma21s_df, rti_df, stb_df, glp_df, vadx_df,
+                         gmma_df, qulla_df, van_df, hve_df, hv1y_df, adl_df, ema20_df,
                          dtrev_df], how='left')
 
         if not args.focus_only:

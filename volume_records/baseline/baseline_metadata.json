@@ -1,0 +1,10 @@
+{
+  "baseline_as_of_date": {
+    "daily": "2026-09-03",
+    "weekly": "2026-08-31",
+    "monthly": "2026-08-01"
+  },
+  "generated_at": "2026-09-04T08:53:29",
+  "ticker_count": 3932,
+  "source": "yahoo"
+}

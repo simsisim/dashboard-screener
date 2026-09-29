@@ -17,6 +17,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -28,6 +29,7 @@ from src import confluence, data_loader, on_demand, report  # noqa: E402
 from src import workflow as wf_engine  # noqa: E402
 from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
+from src.focus import volume_records  # noqa: E402
 
 st.set_page_config(page_title='Step-2 Filters — Leaders & Focus',
                    layout='wide')
@@ -139,6 +141,7 @@ st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md 
 TABS = {
     'leaders': '🏆 Leaders’ Lists',
     'all': '🔎 Screener',
+    'volume': '🔊 Volume Records',
     'focus': '🎯 Focus List',
     'confluence': '🎖️ Confluence',
     'timing': '🕐 Timing Signals',
@@ -156,6 +159,7 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'ts_run', 'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
                'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
+               'vr_save_list',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
                'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
@@ -210,6 +214,28 @@ def _universe_line() -> str:
             f'have &lt; {config.MIN_BARS_TEMPLATE} daily bars: too short for '
             f'Minervini / SCTR, but they can still pass CANSLIM '
             f'(fundamentals only)')
+
+
+def _hve_line() -> str:
+    """Info-box line: which HVE baseline the volume-record columns use."""
+    s = volume_records.read_status()
+    if not s:
+        return ('<b>HVE volume records</b> — no ledger yet: copy metaVolume\'s '
+                '<code>HVE_historical_daily.csv</code> + '
+                '<code>baseline_metadata.json</code> into '
+                '<code>volume_records/baseline/</code> and re-run the screeners')
+    age = (pd.Timestamp(s['last_bar']) - pd.Timestamp(s['baseline_cutoff'])).days
+    sc = s['status_counts']
+    return (f'<b>HVE volume records</b> — all-time records 2020-01-02 → '
+            f'{s["baseline_cutoff"]} come from the metaVolume baseline '
+            f'({s["baseline_tickers"]} tickers, imported by hand); the '
+            f'{s["bars_after_cutoff"]} bars after it (to {s["last_bar"]}) are '
+            f'checked on every run: {s["events"]} new records. Baseline is '
+            f'{age} days old{" — consider a metaVolume rebuild" if age > 365 else ""}. '
+            f'No HVE value for: {sc.get("no_baseline", 0)} not in the baseline, '
+            f'{sc.get("short_history", 0)} with &lt; {config.HVE_MIN_BARS} bars, '
+            f'{sc.get("baseline_mismatch", 0)} whose volume history changed '
+            f'since the baseline (split re-adjustment)')
 
 
 def _how_built(title: str, lines: list):
@@ -306,6 +332,7 @@ if ACTIVE_TAB == 'all':
         '(AND), then Tight / not-extended with Any (OR)); in <b>Merge</b> mode '
         'both levels screen the whole universe and are joined (level 1 OR '
         'level 2). The Filters panel is ANDed on top of the result',
+        _hve_line(),
     ])
     # ---------------- top bar: Presets | Lists | My Screener | My Lists ----
     tb1, tb2, tb3, tb4 = st.columns(4)
@@ -639,11 +666,24 @@ if ACTIVE_TAB == 'all':
         a21.checkbox('52w low breakdown', key='adv_52w_low_breakdown')
         a22.checkbox('EMA20 pullback test', key='adv_ema20_pullback')
         a23.checkbox('Downtrend reversal', key='adv_downtrend_reversal')
-        a24, a25, _a26, _a27 = st.columns(4)
+        a24, a25, a26, a27 = st.columns(4)
         a24.checkbox('CANTATA CE leader', key='adv_cantata',
                      help=f'in_cantata: CE >= {config.CANTATA_MIN_CE} of 18')
         a25.slider('CANTATA CE ≥', 0.0, 18.0, key='adv_ce_min', step=0.5,
                    help='0 = off; CET(0-7) + CEF(0-11)')
+        a26.checkbox('21dma-structure pullback', key='adv_21dma_pullback',
+                     help=f'trend up + close within ±{config.MA21S_PULLBACK_PCT:g}% '
+                          'of the EMA21 high/low band (PrimeTrading script)')
+        a27.multiselect('21dma-structure zone',
+                        ['extended', 'above', 'inside', 'undercut', 'below'],
+                        key='adv_ma21s_zone',
+                        help='close vs the band: above/undercut = within '
+                             f'{config.MA21S_PULLBACK_PCT:g}% of it; empty = all')
+        a28, a29, _a30, _a31 = st.columns(4)
+        a28.multiselect('21dma-structure trend', ['up', 'down'],
+                        key='adv_ma21s_trend', help='empty = all')
+        with a29:
+            _thresh_widget('ma21s_dist')
         st.markdown('**Volume & trend filters**')
         v1, v2, v3, v4 = st.columns(4)
         with v1:
@@ -654,6 +694,11 @@ if ACTIVE_TAB == 'all':
             _thresh_widget('mfi')
         with v4:
             _thresh_widget('adx')
+        v5, v6, _v7, _v8 = st.columns(4)
+        with v5:
+            _thresh_widget('hve_since')
+        with v6:
+            _thresh_widget('hv1y_since')
 
     # ------------------------------- mask ----------------------------------
     selections = {}
@@ -691,6 +736,11 @@ if ACTIVE_TAB == 'all':
                  'gmma_state', 'gmma_separation_pct', 'gmma_total_spread',
                  'gmma_compression_breakout',
                  'in_volume_anomaly', 'volume_zscore', 'volume_ratio',
+                 'in_21dma_pullback', 'ma21s_zone', 'ma21s_dist_pct',
+                 'ma21s_trend', 'ma21s_bearish_bar', 'ma21s_high',
+                 'ma21s_close', 'ma21s_low',
+                 'hve_bars_since', 'hve_date', 'hve_count_50', 'hve_status',
+                 'hv1y_bars_since', 'hv1y_date', 'hv1y_vs_prior_pct',
                  'rsi14', 'in_52w_high_breakout', 'in_52w_low_breakdown',
                  'in_ema20_pullback', 'ema20', 'in_downtrend_reversal',
                  'in_adl_accumulation', 'adl_composite_score',
@@ -808,6 +858,215 @@ if ACTIVE_TAB == 'all':
         st.rerun()
 
 # ------------------------------------------------------------ leaders -----
+# ------------------------------------------------ Volume Records ----------
+# Screener-style tab over the volume-record screens: 1 Pick screens (HVE,
+# HV1Y — Include / Exclude), 2 Combine (AND / OR), 3 Filters. One level.
+# HVE: records up to the baseline cutoff come from the metaVolume baseline
+# (imported by hand into volume_records/baseline/), after it from the ledger
+# run_screeners.py recomputes every run. HV1Y: rolling 1-year high, computed
+# every run (src/focus/volume_records.py).
+VR_SCREENS = ['HVE', 'HV1Y']
+
+if ACTIVE_TAB == 'volume':
+    _how_built('ℹ️ How Volume Records are built', [
+        _universe_line(),
+        _hve_line(),
+        '<b>HVE</b> (highest volume ever) = a day whose volume beats every '
+        'earlier day since 2020-01-02, the start of the price history '
+        '(metaVolume’s rule, strictly greater). <b>HV1Y</b> = the highest '
+        f'volume of the trailing {config.HV1Y_BARS} bars (~1 year; metaVolume '
+        'uses 365 calendar days). Both need ≥ '
+        f'{config.HVE_MIN_BARS} bars of history',
+        '<b>Last N bars</b> counts trading bars, the latest bar included: '
+        'N = 10 is the latest bar and the 9 before it. For HVE a window '
+        'reaching back past the baseline cutoff also sees the baseline’s own '
+        'records',
+        '<b>vs prior</b> = how far (%) the day beat the record before it '
+        '(HVE) or the highest of the year before it (HV1Y). <b>HVE records</b> '
+        '= how many all-time records the ticker set inside the window',
+    ])
+    _st = volume_records.read_status()
+    if not _st or not _st.get('bar_dates') or 'hv1y_bars_since' not in full:
+        st.warning('No HVE ledger / HV1Y columns yet — re-run the screeners.')
+        st.stop()
+
+    for _k, _v in {'vr_inc': ['HVE'], 'vr_exc': [], 'vr_pick_as': 'Include',
+                   'vr_mode': 'All (AND)', 'vr_excl_funds': True}.items():
+        st.session_state.setdefault(_k, _v)
+
+    # ---- 1 Pick screens
+    st.markdown('**1&nbsp;&nbsp;Pick screens**')
+    with st.container(border=True):
+        pc1, pc2, pc3 = st.columns([1, 1.3, 1])
+        vr_pick_as = pc1.segmented_control(
+            'Clicking a screen adds it to', ['Include', 'Exclude (NOT)'],
+            key='vr_pick_as') or 'Include'
+        pc2.pills('Volume-record screens'
+                  + ('' if vr_pick_as == 'Include' else ' — excluding'),
+                  VR_SCREENS, selection_mode='multi',
+                  key='vr_inc' if vr_pick_as == 'Include' else 'vr_exc',
+                  help='Click again to remove.')
+        vr_n = pc3.number_input('Within the last N bars', 1,
+                                len(_st['bar_dates']), 10, key='vr_n_bars',
+                                help='applies to every screen')
+    vr_inc = [x for x in st.session_state['vr_inc'] or [] if x in VR_SCREENS]
+    vr_exc = [x for x in st.session_state['vr_exc'] or [] if x in VR_SCREENS]
+
+    # per-screen masks over the whole universe
+    _ok = full.index[full['hve_status'] == 'ok']
+    rec = volume_records.recent_records(vr_n, full.index)
+    rec = rec[rec['ticker'].isin(_ok)]
+    vr_masks = {
+        'HVE': pd.Series(full.index.isin(rec['ticker'].unique()), index=full.index),
+        'HV1Y': (full['hv1y_bars_since'] < vr_n).fillna(False).astype(bool),
+    }
+    vr_mode = st.session_state.get('vr_mode', 'All (AND)')
+    if vr_inc:
+        _m = [vr_masks[x] for x in vr_inc]
+        vr_mask = (pd.concat(_m, axis=1).any(axis=1) if vr_mode.startswith('Any')
+                   else pd.concat(_m, axis=1).all(axis=1))
+    else:
+        vr_mask = pd.Series(False, index=full.index)
+    for x in vr_exc:
+        vr_mask &= ~vr_masks[x]
+
+    # ---- 2 Combine
+    st.markdown('**2&nbsp;&nbsp;Combine**')
+    with st.container(border=True):
+        if not vr_inc:
+            st.caption('No screen included yet — pick HVE and/or HV1Y above '
+                       '(Exclude only removes names from an included screen).')
+        else:
+            cc1, cc2 = st.columns([4, 1])
+            cc2.radio('Match', ['All (AND)', 'Any (OR)'], key='vr_mode',
+                      disabled=len(vr_inc) < 2)
+            _join = ' · AND · ' if vr_mode.startswith('All') else ' · OR · '
+            _expr = _join.join(f'`{x}` ({int(vr_masks[x].sum())})'
+                               for x in vr_inc)
+            if vr_exc:
+                _expr += ' · ' + ' · '.join(
+                    f'NOT `{x}` ({int(vr_masks[x].sum())})' for x in vr_exc)
+            cc1.markdown(_expr)
+            cc1.markdown(f'→ **{int(vr_mask.sum())}** tickers '
+                         '(before the Filters below)')
+            if len(vr_inc) == 2:
+                cc1.caption('Every HVE is also an HV1Y (an all-time record '
+                            'also beats the past year), so AND gives the HVE '
+                            'list and OR the HV1Y list. To see 1-year volume '
+                            'highs that are NOT all-time records: Include '
+                            'HV1Y + Exclude HVE.')
+
+    # ---- 3 Filters
+    st.markdown('**3&nbsp;&nbsp;Filters**')
+    with st.container(border=True):
+        f1, f2, f3, f4 = st.columns(4)
+        _opts = {fam: dict(dfil.THRESHOLD_FAMILIES[fam])
+                 for fam in ('mktcap', 'price', 'adv_dollar')}
+        vr_cap = f1.selectbox('Market cap', list(_opts['mktcap']),
+                              key='vr_mktcap')
+        vr_price = f2.selectbox('Last closing price', list(_opts['price']),
+                                key='vr_price')
+        vr_adv = f3.selectbox('50d Av. Dollar Volume (ADV)',
+                              list(_opts['adv_dollar']), key='vr_adv')
+        vr_min_vs = f4.number_input('vs prior ≥ (%)', 0.0, 1000.0, 0.0, 5.0,
+                                    key='vr_min_vs_prior',
+                                    help='best of the matched screens; 0 = off')
+        f5, f6, f7 = st.columns([1.5, 1.5, 1])
+        vr_idx = f5.multiselect('Index membership (empty = whole universe)',
+                                index_choices(), key='vr_index')
+        vr_sec = f6.multiselect('Sector', sorted(full['sector'].dropna().unique()),
+                                key='vr_sector')
+        vr_nofunds = f7.checkbox('Exclude funds (Investment trusts)',
+                                 key='vr_excl_funds',
+                                 help='closed-end / muni funds: their volume '
+                                      'spikes are fund events, not accumulation')
+
+    base = full[vr_mask]
+    if len(base):
+        # per-ticker table: HVE facts within the window + HV1Y facts
+        tbl = pd.DataFrame(index=base.index)
+        _hits = pd.DataFrame({x: vr_masks[x].loc[base.index] for x in vr_inc})
+        tbl['matched_by'] = [', '.join(c for c, v in r.items() if v)
+                             for _t, r in _hits.iterrows()]
+        _r = rec[rec['ticker'].isin(base.index)]
+        tbl['hve_date'] = base['hve_date']
+        tbl['hve_bars_since'] = base['hve_bars_since']
+        tbl['hve_records'] = (_r.groupby('ticker').size()
+                              .reindex(base.index).fillna(0).astype(int))
+        tbl['hve_vs_prior_pct'] = np.nan         # newest record in the window
+        if len(_r):
+            _lt = _r.loc[_r.groupby('ticker')['date'].idxmax()].set_index('ticker')
+            tbl['hve_vs_prior_pct'] = ((_lt['volume'].astype(float)
+                                        / _lt['prior_max'].astype(float) - 1)
+                                       * 100).round(1).reindex(base.index)
+        for c in ('hv1y_date', 'hv1y_bars_since', 'hv1y_vs_prior_pct'):
+            tbl[c] = base[c]
+        ctx_cols = ['close', 'gain_5d', 'gain_1m', 'rel_volume_today', 'stage',
+                    'rs_pct', 'ext_21ema_atr', 'adr20_pct', 'adv50_dollar',
+                    'market_cap', 'sector', 'industry', 'exchange']
+        tbl = tbl.join(base[[c for c in ctx_cols if c in base.columns]])
+
+        # filters
+        keep = pd.Series(True, index=tbl.index)
+        for col, sel, fam in (('market_cap', vr_cap, 'mktcap'),
+                              ('close', vr_price, 'price'),
+                              ('adv50_dollar', vr_adv, 'adv_dollar')):
+            rng = _opts[fam][sel]
+            if rng is not None:
+                keep &= tbl[col].notna() & (tbl[col] >= rng[0])
+        _vs = pd.concat([tbl['hve_vs_prior_pct'].where(_hits['HVE'])
+                         if 'HVE' in _hits else None,
+                         tbl['hv1y_vs_prior_pct'].where(_hits['HV1Y'])
+                         if 'HV1Y' in _hits else None], axis=1).max(axis=1)
+        if vr_min_vs > 0:
+            keep &= _vs >= vr_min_vs
+        if vr_idx:
+            _sel = set(vr_idx)
+            keep &= np.array([bool(IDX_MAP.get(str(t).upper(), frozenset())
+                                   & _sel) for t in tbl.index])
+        if vr_sec:
+            keep &= tbl['sector'].isin(vr_sec)
+        if vr_nofunds:
+            keep &= tbl['industry'] != 'Investment trusts'
+        _recent = pd.concat([tbl['hve_bars_since'].where(_hits['HVE'])
+                             if 'HVE' in _hits else None,
+                             tbl['hv1y_bars_since'].where(_hits['HV1Y'])
+                             if 'HV1Y' in _hits else None], axis=1).min(axis=1)
+        tbl = (tbl.assign(_recent=_recent, _vs=_vs)[keep]
+               .sort_values(['_recent', '_vs'], ascending=[True, False])
+               .drop(columns=['_recent', '_vs']))
+    else:
+        tbl = pd.DataFrame()
+
+    _span = (f'{_st["bar_dates"][-min(vr_n, len(_st["bar_dates"]))]} → '
+             f'{_st["bar_dates"][-1]}')
+    st.caption(f'{len(tbl):,} tickers after filters — last {vr_n} bars ({_span})')
+    if len(tbl):
+        show = tbl.copy()
+        show.index.name = 'ticker'
+        if len(show) <= 200:
+            show.insert(1, 'spark',
+                        [_spark_closes(t, run.name) for t in show.index])
+        st.dataframe(show, use_container_width=True,
+                     height=min(120 + 35 * len(show), 700),
+                     column_config={'spark': st.column_config.LineChartColumn(
+                         '120d', width=170)})
+        _tag = '_'.join(vr_inc) + ''.join(f'_not{x}' for x in vr_exc)
+        d1, d2, _d3 = st.columns([1, 1, 3])
+        d1.download_button('Download CSV', tbl.to_csv().encode(),
+                           file_name=f'volrec_{_tag}_last{vr_n}_{run.name}.csv')
+        d1.download_button('⭳ TradingView .txt',
+                           _tv_txt(tbl, f'{" ".join(vr_inc)} last {vr_n} bars'),
+                           file_name=f'volrec_{_tag}_last{vr_n}_{run.name}.txt',
+                           mime='text/plain', help=_TV_HELP)
+        ln = d2.text_input('List name', key='vr_list_name',
+                           placeholder='list name…')
+        if d2.button('Save as list', key='vr_save_list',
+                     disabled=not ln.strip()):
+            dfil.save_list(ln.strip(), tbl.index)
+            st.success(f'saved {len(tbl)} tickers to '
+                       f'my_lists/{ln.strip()}.csv')
+
 if ACTIVE_TAB == 'leaders':
     _how_built('ℹ️ How these lists are built', [
         _universe_line(),
@@ -1093,6 +1352,13 @@ if ACTIVE_TAB == 'detail':
             f"ATR | ext40 **{row.get('ext_40sma_atr', '?')}** ATR | "
             f"ADR20 **{row.get('adr20_pct', '?')}**% | RTI **{row.get('rti', '?')}** "
             f"(zone {row.get('rti_zone', '?')})")
+        with right.expander(f'HVE record ladder — status: '
+                            f'{row.get("hve_status", "?")}'):
+            try:
+                st.dataframe(volume_records.ticker_ladder(ticker),
+                             use_container_width=True, hide_index=True)
+            except OSError:
+                st.caption('no HVE baseline in volume_records/baseline/')
         detail = row.to_frame('value')
         detail['value'] = detail['value'].map(
             lambda v: f'{v:,.3f}' if isinstance(v, float) else str(v))

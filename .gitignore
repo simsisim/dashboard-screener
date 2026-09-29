@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# volume-record ledger: rebuilt by run_screeners.py on every run
+volume_records/ledger/

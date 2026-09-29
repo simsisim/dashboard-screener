@@ -179,6 +179,30 @@ VOLANOM_STD_THRESHOLD = 3.0         # sigma above rolling mean
 VOLANOM_MIN_VOLUME = 100_000        # shares today
 VOLANOM_MIN_RELATIVE = 1.5          # vol / rolling mean
 
+# --- Focus: volume records — HVE (Highest Volume Ever). Port of metaVolume's
+# daily checker (metaVolume/src/vol_daily_checker.py::check_and_update_hve).
+# The frozen baseline (all-time records up to its cutoff) is built in
+# metaVolume (`main.py --preset preprocess_full`) and copied here BY HAND:
+#   metaVolume/results/pre/historical/{HVE_historical_daily.csv,
+#                                      baseline_metadata.json}
+#   -> volume_records/baseline/
+# This project never builds the baseline; each screener run recomputes the
+# ledger (new records after the cutoff) from scratch into volume_records/ledger/.
+VOLREC_DIR = SCREENERS_ROOT / 'volume_records'
+VOLREC_BASELINE_DIR = VOLREC_DIR / 'baseline'
+VOLREC_LEDGER_DIR = VOLREC_DIR / 'ledger'
+HVE_MIN_BARS = 252          # < 1y of bars: a "record" is meaningless (IPOs)
+HVE_RECENT_BARS = 50        # hve_count_50 window (trading bars)
+# --- Focus: 21dma-structure pullback (PrimeTrading "ADJUSTABLE MA
+# STRUCTURE" TV script v7.3, gd_systems/primeTrading/; daily defaults) ---
+MA21S_LENGTH = 21           # script: dailyLength = 21, dailyType = 'EMA'
+MA21S_PULLBACK_PCT = 2.0    # user: close within +-2% of the band (inside
+                            # counts as 0) + trend up = pullback mode
+HV1Y_BARS = 252             # HV1Y (highest volume in 1 year) window; metaVolume
+                            # uses 365 calendar days (HV1Y_window_days) ~ same
+HVE_MATCH_TOL = 0.01        # baseline record vs today's file volume on that
+                            # date; > 1% off = volume re-adjusted (split)
+
 # --- Leaders: ADL 5-step accumulation suite (more_screeners.md Task 7;
 # source metaData_v1/src/screeners/ad_line/ package — adl_calculator,
 # adl_mom_analysis, adl_short_term, adl_ma_analysis, adl_composite_scoring;
