@@ -1147,6 +1147,60 @@ print(json.dumps(out))
     check('21dma-structure: vectorized == bar-by-bar Pine replay', not _bad,
           f'mismatches: {_bad}')
 
+    # 17. Leader map: the report's own calls, frozen at the 2026-09-28 close
+    # (Prime Report 9/28 Setups: in the buy area DELL / RNG / LITE / S; on
+    # weakness AVT / SMTC / NTAP / SWKS = above the buy area) + the weekly
+    # distance vs a hand-rolled weekly resample
+    from src import leader_map as lm_mod
+    from src.focus import atr_extension as ae_mod
+    lm_tk = ['DELL', 'RNG', 'LITE', 'S', 'AVT', 'SMTC', 'NTAP', 'SWKS']
+    lm_data = data_loader.load_price_matrices(lm_tk, verbose=False)
+    _cut = pd.Timestamp('2026-09-28')
+    _d = {k: v.loc[:_cut] for k, v in lm_data.items()
+          if isinstance(v, pd.DataFrame)}
+    if _d['close'].index.max() == _cut:
+        _ae = ae_mod.evaluate(_d['high'], _d['low'], _d['close'], _d['volume'])
+        _st = {t: lm_mod.classify(_ae.at[t, 'ext_21ema_atr'],
+                                  _ae.at[t, 'ext_10wsma_atr']) for t in lm_tk}
+        _exp = {t: 'buy' for t in lm_tk[:4]} | {t: 'above' for t in lm_tk[4:]}
+        check('leader map: 2026-09-28 states == Prime Report setups',
+              _st == _exp, str({t: s for t, s in _st.items() if s != _exp[t]}))
+        _c = _d['close']['DELL']
+        _wk = [_c[_c.index <= f].iloc[-1] for f in
+               pd.date_range(end=_cut + pd.Timedelta(days=4), periods=10, freq='W-FRI')]
+        _atr = indicators.wilder_atr(_d['high'], _d['low'], _d['close'],
+                                     config.ATR_PERIOD)['DELL'].iloc[-1]
+        _y = round((_c.iloc[-1] - sum(_wk) / 10) / _atr, 2)
+        # 18. Setups — the plan: the report's numbers (entry = close in the
+        # buy area, top of the 21dma-structure on weakness; stop = box bottom;
+        # 2R target; "N of the last 30 closed in the band")
+        _pos = pd.DataFrame({'x_daily21_atr': _ae['ext_21ema_atr'],
+                             'y_weekly10_atr': _ae['ext_10wsma_atr'],
+                             'state': pd.Series(_st), 'group': '',
+                             'list_rank': range(1, len(lm_tk) + 1)})
+        _orig = data_loader.load_price_matrices
+        data_loader.load_price_matrices = (
+            lambda t, **k: {kk: (v.loc[:_cut] if isinstance(v, pd.DataFrame) else v)
+                            for kk, v in _orig(t, **k).items()})
+        try:
+            _sets = lm_mod.build_setups(_pos)
+        finally:
+            data_loader.load_price_matrices = _orig
+        _rep = {'DELL': (-5.1, 599.27, 16), 'RNG': (-6.0, 85.18, 6),
+                'LITE': (-4.3, 1001.43, 23), 'S': (-4.6, 24.83, 11),
+                'SMTC': (-6.1, 187.27, 11), 'NTAP': (-3.5, 210.82, 22),
+                'SWKS': (-5.0, 93.41, 12)}      # AVT: our bars differ slightly
+        _off = {t: (_sets.at[t, 'stop_pct'], _sets.at[t, 'target'],
+                    _sets.at[t, 'in_band_30']) for t in _rep
+                if abs(_sets.at[t, 'stop_pct'] - _rep[t][0]) > 0.15
+                or abs(_sets.at[t, 'target'] / _rep[t][1] - 1) > 0.002   # closes differ by cents
+                or _sets.at[t, 'in_band_30'] != _rep[t][2]}
+        check('setups: 2026-09-28 stop % / 2R target / days in band == report',
+              not _off, str(_off))
+        check('leader map: weekly 10-SMA distance == hand-rolled weeks',
+              abs(_ae.at['DELL', 'ext_10wsma_atr'] - _y) < 0.011,
+              f'{_ae.at["DELL", "ext_10wsma_atr"]} vs {_y}')
+
     print()
     ok_all = True
     for status, name, detail in results:

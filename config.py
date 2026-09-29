@@ -86,6 +86,22 @@ EXT_SMA_PERIOD = 40                  # user: 40 SMA (ALEX default is 50)
 EXT_THRESHOLD_1 = 2.0                # extended (ALEX "Threshold 1", yellow)
 EXT_THRESHOLD_2 = 5.0                # very extended (ALEX "Threshold 2", red)
 EXT_BELOW_THRESHOLD = -2.0           # extended below
+WEEKLY_SMA_PERIOD = 10               # ALEX script p10w / ma_10w_type 'SMA'
+
+# --- Leader map ("Where is each leader?", PrimeTrading Lab Report) ---
+# x = (close - EMA21) / daily ATR14, y = (close - weekly SMA10) / daily ATR14
+# (ALEX script dist_21 / dist_10w). Zones and the buy area as in the report.
+LMAP_DAILY_UNDER = -0.5     # x < -0.5: under the 21-day
+LMAP_DAILY_ABOVE = 1.0      # x > +1: above it; between: in the 21-day band
+LMAP_WEEKLY_EXT = 4.0       # y > +4: weekly extended; y < 0: lost the weekly
+LMAP_XLIM = (-1.5, 4.5)     # plot window; points outside get an edge marker
+LMAP_SETUP_MAX_ABOVE = 2.0  # Setups: "on weakness" = above the buy area by
+                            # <= this many ATR (weekly normal); report 9/28:
+                            # AVT / SMTC / NTAP / SWKS at +1.04..+1.47
+LMAP_SETUP_R = 2.0          # target = entry + 2 x (entry - stop)  ("2R")
+LMAP_SETUP_LOOKBACK = 30    # sessions for the travel bar / band squares
+LMAP_SETUP_XLIM = (-2.0, 5.0)
+LMAP_YLIM = (-1.0, 6.0)
 
 # --- 2nd cat: ADR / liquidity (ALEX adr_len=20; StockScreenHero "20d ADR %") ---
 ADR_PERIOD = 20

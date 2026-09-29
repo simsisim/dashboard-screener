@@ -82,3 +82,41 @@ leaders, never to the whole universe.
       Stockbee 9M as chips in 1 Pick screens.
 - [x] `volume_records/`: baseline committed, ledger gitignored (rebuilt
       every run) — decided 2026-09-29.
+
+## 6. Where is each leader? (leader map tab)
+
+- [ ] "As-of date" picker: redraw the map for any past close (e.g. to line up
+      with the Prime Report being read) — slice the price panel to that date
+      and recompute ext_21ema_atr / ext_10wsma_atr for the list only
+      (today: latest bar of the screener run).
+- [ ] Alex's themes: a CSV `theme` column already overrides the industry
+      grouping — build / keep a theme map file if industry proves too coarse.
+- [ ] SKHY (in his list) has no price file in downloadData_v1.
+- [ ] Setups — the plan: the report's per-name tags ("tight", "higher lows ·
+      12d", "volume dry") and "reclaimed Sep 25 · back inside 1d · 25th pct"
+      (this leg ranked against 3 years of the stock's own legs) are not
+      defined in the report — write our own rules if wanted. Alex's pick
+      (checklist 4/5, one per theme) is not modelled either: we list every
+      buy-area name + every name <= +2 ATR above the box.
+- [ ] Growth Cycle page (Lab Report "Growth Cycle", 9/28 screenshot):
+      - Ratio = growth / value = IWF / IWD (confirmed: his 9/28 "growth
+        125.18 · value 250.01" = our IWF 125.20 / IWD 250.05; both in
+        downloadData_v1 from 2020).
+      - Risk gate: the ratio's "10w structure" = EMA10 of its weekly highs
+        and weekly lows (weekly bars built from daily). Close above the band
+        = risk-on, below = risk-off, inside = keep the last side.
+      - Momentum: 10-day change in the ratio's gap to that band's midline,
+        smoothed 3 days, / 63-day volatility (sigma); flips only past
+        +-0.25 sigma. Extended above +1.3 sigma; Trim if also > +2 sigma from
+        its 21-day EMA.
+      - Six zones: Risk-off, Probe, Ramp Up, Reload, Hold, Trim (counter-
+        clockwise cycle); "zone every day" history strip since 2022.
+      - Zone stats ("next 20 days, up x% of the time, growth won y%"): use
+        QQEW (First Trust equal-weight NASDAQ-100; Alex uses QQQE, the
+        Direxion equivalent) — user added QQEW to downloadData_v1, available
+        after its next run.
+      - Calibrate against his readings before trusting it: 9/28 = Ramp Up,
+        day 7; risk-on since Sep 18; momentum +1.86 sigma; 21d stretch
+        +1.27 sigma. Some rules are ambiguous (which volatility, the +-0.25
+        sigma flip) — expect a few iterations.
+- [ ] Second row of tabs once there are 2-3 Lab Report pages.

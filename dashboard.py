@@ -30,6 +30,7 @@ from src import workflow as wf_engine  # noqa: E402
 from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 from src.focus import volume_records  # noqa: E402
+from src import leader_map  # noqa: E402
 
 st.set_page_config(page_title='Step-2 Filters — Leaders & Focus',
                    layout='wide')
@@ -148,6 +149,7 @@ TABS = {
     'patterns': '🌊 Patterns',
     'workflows': '🧭 Workflows',
     'detail': '📋 Ticker detail',
+    'leadermap': '📍 Where is each leader?',
 }
 # Only the active section's widgets are drawn, and Streamlit drops the state
 # of any keyed widget not drawn in a run — so switching tabs would wipe e.g.
@@ -159,12 +161,12 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'ts_run', 'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
                'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
-               'vr_save_list',
+               'vr_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
                'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
                       'wf_dupe_', 'wf_dropstg_', 'lead_tv_', 'wf_stage_csv_',
-                      'wf_stage_tv_')
+                      'wf_stage_tv_', 'lm_setups_')
 for _k in list(st.session_state.keys()):
     if _k not in _NO_PERSIST and not _k.startswith(_NO_PERSIST_PREFIX):
         st.session_state[_k] = st.session_state[_k]
@@ -727,7 +729,8 @@ if ACTIVE_TAB == 'all':
         mask &= pd.Series(full.index.isin(upload_syms) | full.index.isin(_variants),
                           index=full.index)
     view_cols = ['close', 'scooter_score', 'rs_pct', 'minervini_count', 'stage',
-                 'ext_21ema_atr', 'ext_40sma_atr', 'ext_50sma_atr', 'adr20_pct', 'rti',
+                 'ext_21ema_atr', 'ext_40sma_atr', 'ext_50sma_atr', 'ext_10wsma_atr',
+                 'adr20_pct', 'rti',
                  'rti_zone',
                  'rti_dots', 'rti_expansion', 'rel_volume_today', 'daily_gain_pct',
                  'weekly_gain_pct', 'in_9m_movers', 'in_weekly_movers',
@@ -1066,6 +1069,239 @@ if ACTIVE_TAB == 'volume':
             dfil.save_list(ln.strip(), tbl.index)
             st.success(f'saved {len(tbl)} tickers to '
                        f'my_lists/{ln.strip()}.csv')
+
+# ------------------------------------------ Where is each leader? --------
+# PrimeTrading Lab Report "Leaders Map" for a user list FILE (no presets):
+# each ticker on two clocks in daily ATR14 units — x = vs the 21-day EMA,
+# y = vs the 10-week SMA (src/leader_map.py). Writes leader_map_<list>.png
+# and .csv into the run folder, then shows them.
+LM_DIRS = (ROOT / 'watchlists', dfil.MY_LISTS)
+
+if ACTIVE_TAB == 'leadermap':
+    _how_built('ℹ️ How the leader map works', [
+        '<b>What it answers.</b> For every name in your list, two questions: '
+        '<b>is the weekly trend still intact?</b> (up / down on the map) and '
+        '<b>is the daily entry still there, or already missed?</b> (left / '
+        'right). The green box is where both answers are “yes”',
+        '<b>How to read a dot.</b> Right of the box = the stock ran away from '
+        'its 21-day average (extended: wait for a pullback, don’t chase). Left '
+        'of the box = it closed under the 21-day average (weakening). Above the '
+        'dashed +4 line = stretched far above its 10-week average. Under the 0 '
+        'line = it closed below its 10-week average: the weekly trend is lost',
+        '<b>Why “in ATR”.</b> Distances are measured in ATR — the stock’s '
+        'average daily move over 14 days — not in % or $. “+1 ATR above the 21 '
+        'EMA” means one normal day’s move above it, for a calm stock or a wild '
+        'one alike, so all names share one scale',
+        '<b>Across (daily)</b> = (today’s close − 21-day EMA) ÷ ATR14',
+        '<b>Up (weekly)</b> = (today’s close − 10-week SMA) ÷ the same daily '
+        'ATR14. We only have daily bars, and that is enough: a weekly close is '
+        'simply the last daily close of that week (normally Friday). We take '
+        'each week’s last close and average the last 10. The current, '
+        'unfinished week counts with today’s close — exactly what TradingView '
+        'does for a weekly average shown on a daily chart. (downloadData’s own '
+        'weekly files are not used.) The worked example below shows the 10 '
+        'weekly closes for any ticker',
+        f'<b>Zones.</b> Daily: under the 21-day &lt; {config.LMAP_DAILY_UNDER:g} '
+        f'ATR · in the band {config.LMAP_DAILY_UNDER:g} to +{config.LMAP_DAILY_ABOVE:g} '
+        f'· above &gt; +{config.LMAP_DAILY_ABOVE:g}. Weekly: lost &lt; 0 · '
+        f'normal 0 to +{config.LMAP_WEEKLY_EXT:g} · extended &gt; +{config.LMAP_WEEKLY_EXT:g}. '
+        'Buy area = in the band AND weekly normal. A name under its 10-week '
+        'average is “lost the weekly” wherever it sits left/right',
+        '<b>Sources.</b> Formulas: Alex’s TradingView script “ALEX – ATR '
+        'Extensions” (<code>gd_systems/primeTrading/ATR extensions Sizing TV '
+        'script_v7.txt</code>: <code>dist(x) = (close − x) / atr_val</code>, '
+        '<code>atr_val</code> = daily ATR14, 21 EMA daily, 10 SMA weekly). Zones, '
+        'box and states: his Lab Report “Leaders Map”. Checked against his '
+        'report: the 9/25 map positions and the 9/28 buy-area / on-weakness '
+        'names (validate.py #17)',
+        '<b>Input</b>: one list file (TradingView .txt or CSV/TXT) from '
+        '<code>watchlists/</code>, <code>my_lists/</code> or an upload — no '
+        'presets; a CSV <code>theme</code> column groups “Where they cluster”, '
+        f'else the industry. Latest bar only (run <code>{run.name}</code>). '
+        'Output: <code>results/&lt;run&gt;/leader_map_&lt;list&gt;.png / .csv</code> '
+        'and <code>leader_setups_&lt;list&gt;.png / .csv</code>',
+        '<b>Setups — the plan</b> (below the map) turns the buy-area and '
+        '“on weakness” names into a plan on the same daily axis: buy range, '
+        'entry, stop at the bottom of the box, 2R target, where the name '
+        'travelled over the last 30 sessions and how many of them closed in '
+        'the band — rules explained above the plan'
+    ])
+    if 'ext_10wsma_atr' not in full.columns:
+        st.warning('This run has no weekly column (ext_10wsma_atr) — re-run '
+                   'the screeners.')
+        st.stop()
+
+    _files = sorted((p for d in LM_DIRS if d.exists() for p in d.iterdir()
+                     if p.suffix.lower() in ('.txt', '.csv')),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    _labels = {f'{p.parent.name}/{p.name}': p for p in _files}
+    lc1, lc2, lc3 = st.columns([2, 2, 1], vertical_alignment='bottom')
+    lm_pick = lc1.selectbox('List file (newest first)', ['— None Selected —']
+                            + list(_labels), key='lm_file')
+    lm_up = lc2.file_uploader('…or upload a list (CSV/TXT)', type=['csv', 'txt'],
+                              key='lm_upload')
+    lm_go = lc3.button('Generate map', key='lm_run', type='primary')
+
+    src_name, src_text, src_themes = None, None, {}
+    if lm_up is not None:
+        src_name = Path(lm_up.name).stem
+        src_text = lm_up.getvalue().decode('utf-8', errors='ignore')
+    elif lm_pick in _labels:
+        _p = _labels[lm_pick]
+        src_name, src_text = _p.stem, _p.read_text(errors='ignore')
+        src_themes = leader_map.read_themes(_p) if _p.suffix.lower() == '.csv' else {}
+
+    if src_name:
+        _slug = dfil._safe(src_name).replace(' ', '_')
+        png_p = run / f'leader_map_{_slug}.png'
+        csv_p = run / f'leader_map_{_slug}.csv'
+        spng_p = run / f'leader_setups_{_slug}.png'
+        scsv_p = run / f'leader_setups_{_slug}.csv'
+        if lm_go or not png_p.exists() or not scsv_p.exists():
+            tickers = leader_map.parse_tickers(src_text)
+            # list names outside the universe: compute the two columns on the fly
+            _out = [t for t in tickers if leader_map._lookup(full, t) is None]
+            extra = None
+            if _out:
+                from src.focus import atr_extension
+                _d = data_loader.load_price_matrices(_out, verbose=False)
+                if len(_d['meta']):
+                    extra = atr_extension.evaluate(_d['high'], _d['low'],
+                                                   _d['close'], _d['volume'])
+                    extra['close'] = _d['close'].iloc[-1]
+            pos, missing = leader_map.build(full, tickers, src_themes, extra)
+            _nf = pd.DataFrame(index=pd.Index(missing, name='ticker'))
+            pd.concat([pos.assign(not_found=False),
+                       _nf.assign(not_found=True)]).to_csv(csv_p)
+            leader_map.plot(pos, 'Where is each leader?',
+                            f'{src_name} · as of the {run.name} run · '
+                            f'{len(pos)} of {len(tickers)} placed'
+                            + (f' · not found: {", ".join(missing)}' if missing else ''),
+                            png_p)
+            _sets = leader_map.build_setups(pos)
+            _sets.to_csv(scsv_p)
+            if len(_sets):
+                leader_map.plot_setups(
+                    _sets, 'Setups — the plan',
+                    f'{src_name} · as of the {run.name} run · '
+                    f'{int((_sets["role"] == "buy").sum())} in the buy area, '
+                    f'{int((_sets["role"] == "weakness").sum())} on weakness '
+                    f'(≤ +{config.LMAP_SETUP_MAX_ABOVE:g} ATR above the box)', spng_p)
+            elif spng_p.exists():
+                spng_p.unlink()
+        raw = pd.read_csv(csv_p, index_col=0)
+        _nfm = raw['not_found'].astype(str).eq('True')
+        pos, missing = raw[~_nfm].drop(columns='not_found'), list(raw.index[_nfm])
+        pos['list_rank'] = pos['list_rank'].astype('Int64')
+
+        with st.expander('🗺️ Map', expanded=True):
+            st.image(str(png_p), use_container_width=True)
+            st.download_button('⭳ PNG', png_p.read_bytes(), file_name=png_p.name,
+                               mime='image/png')
+        st.caption(f'`{png_p.relative_to(ROOT)}` · {len(pos)} placed'
+                   + (f' · not found (no price file): {", ".join(missing)}'
+                      if missing else ''))
+
+        sc1, sc2 = st.columns([3, 2])
+        with sc1:
+            st.markdown('**By state — best first**')
+            for key, title, wk in leader_map.STATES:
+                names = pos.index[pos['state'] == key]
+                with st.container(border=True):
+                    st.markdown(f'**{title}** · <span style="color:gray">{wk}'
+                                f'</span> — **{len(names)}**',
+                                unsafe_allow_html=True)
+                    st.caption(' '.join(names) if len(names) else '—')
+        with sc2:
+            st.markdown('**Where they cluster** — in the buy area / total')
+            cl = leader_map.clusters(pos)
+            cl['share'] = (cl['in_buy_area'] / cl['total'] * 100).round(0)
+            st.dataframe(cl, use_container_width=True,
+                         column_config={'share': st.column_config.ProgressColumn(
+                             'in box', min_value=0, max_value=100, format='%d%%')})
+            st.caption('Group = the list file’s theme column when present, '
+                       'else the TradingView industry.')
+
+        # ---- Setups — the plan
+        st.subheader('Setups — the plan')
+        _sets = pd.read_csv(scsv_p, index_col=0) if scsv_p.exists() else pd.DataFrame()
+        st.caption(
+            'Every name in the buy area, then every name “on weakness” (above the '
+            f'box by at most +{config.LMAP_SETUP_MAX_ABOVE:g} ATR, weekly normal), '
+            'in list order. <b>buy / wait for</b> = the box in price (21 EMA − 0.5 '
+            'ATR … + 1 ATR). <b>Entry</b> = today’s close in the buy area; on '
+            'weakness = the top of the 21dma-structure (21 EMA of the highs), '
+            'i.e. wait for the pullback. <b>Stop</b> = the bottom of the box. '
+            f'<b>Target</b> = entry + {config.LMAP_SETUP_R:g} × (entry − stop). '
+            'Checked against the 9/28 Prime Report (validate.py #18). Alex’s own '
+            'checklist / theme picks and the “tight / higher lows / volume dry” '
+            'tags are not modelled.', unsafe_allow_html=True)
+        if len(_sets) and spng_p.exists():
+            with st.expander('🗺️ The plan', expanded=True):
+                st.image(str(spng_p), use_container_width=True)
+                st.download_button('⭳ PNG', spng_p.read_bytes(),
+                                   file_name=spng_p.name, mime='image/png',
+                                   key='lm_setups_png')
+            _cols = ['role', 'x', 'close', 'buy_lo', 'buy_hi', 'entry', 'stop',
+                     'stop_pct', 'target', 'target_pct', 'in_band_30',
+                     'travel_min', 'travel_max', 'x_30_ago', 'group', 'rs_pct',
+                     'list_rank']
+            st.dataframe(_sets[[c for c in _cols if c in _sets]],
+                         use_container_width=True,
+                         height=min(120 + 35 * len(_sets), 500))
+            s1, s2, _s3 = st.columns([1, 1, 3])
+            s1.download_button('Download setups CSV', scsv_p.read_bytes(),
+                               file_name=scsv_p.name, key='lm_setups_csv')
+            s2.download_button('⭳ TradingView .txt (setups)',
+                               _tv_txt(_sets, f'Setups — {src_name}'),
+                               file_name=f'leader_setups_{_slug}.txt',
+                               mime='text/plain', help=_TV_HELP,
+                               key='lm_setups_tv')
+        else:
+            st.caption('No name in the buy area or on weakness today.')
+
+        st.subheader('All positions')
+        tbl = pos.sort_values('list_rank')
+        st.dataframe(tbl, use_container_width=True,
+                     height=min(120 + 35 * len(tbl), 600))
+
+        # worked example: the actual numbers behind one dot
+        with st.expander('🧮 Worked example — the numbers behind one dot'):
+            ex_t = st.selectbox('Ticker', list(tbl.index), key='lm_explain')
+            ex = leader_map.explain(ex_t) if ex_t else None
+            if ex is None:
+                st.caption('no price file for this ticker')
+            else:
+                _stt = leader_map.STATE_TITLE[leader_map.classify(ex['x'], ex['y'])]
+                st.markdown(
+                    f"**{ex['ticker']}** at the {ex['date']:%Y-%m-%d} close  \n"
+                    f"close **{ex['close']:,.2f}** · 21-day EMA **{ex['ema21']:,.2f}** · "
+                    f"ATR14 **{ex['atr']:,.2f}** (the stock's average daily move)  \n"
+                    f"**Across (daily)** = ({ex['close']:,.2f} − {ex['ema21']:,.2f}) ÷ "
+                    f"{ex['atr']:,.2f} = **{ex['x']:+.2f} ATR** → "
+                    f"{dict(under='under the 21-day', band='in the 21-day band', above='above the 21-day band')[leader_map.daily_zone(ex['x'])]}  \n"
+                    f"**Up (weekly)** = ({ex['close']:,.2f} − {ex['sma10w']:,.2f}) ÷ "
+                    f"{ex['atr']:,.2f} = **{ex['y']:+.2f} ATR**, where "
+                    f"{ex['sma10w']:,.2f} is the average of the 10 weekly closes below  \n"
+                    f"→ state: **{_stt}**")
+                _w = ex['weeks'].copy()
+                _w['last trading day'] = _w['last trading day'].dt.strftime('%a %Y-%m-%d')
+                _w.index = _w.index.strftime('%Y-%m-%d')
+                st.dataframe(_w.round(2), use_container_width=True)
+                st.caption('Each weekly close = the last daily close of that week. '
+                           'The newest week may be unfinished — it then uses '
+                           'today’s close, like TradingView on a daily chart.')
+        d1, d2, _d3 = st.columns([1, 1, 3])
+        d1.download_button('Download CSV', tbl.to_csv().encode(),
+                           file_name=csv_p.name)
+        _buy = tbl[tbl['state'] == 'buy']
+        d2.download_button('⭳ TradingView .txt (buy area)',
+                           _tv_txt(_buy, f'Buy area — {src_name}'),
+                           file_name=f'leader_map_buy_{_slug}.txt',
+                           mime='text/plain', help=_TV_HELP,
+                           disabled=not len(_buy))
+    else:
+        st.info('Pick a list file (or upload one) to draw the map.')
 
 if ACTIVE_TAB == 'leaders':
     _how_built('ℹ️ How these lists are built', [
