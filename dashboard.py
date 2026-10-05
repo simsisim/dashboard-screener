@@ -775,9 +775,24 @@ if ACTIVE_TAB == 'all':
         view_cols = ['hits', 'matched_by'] + view_cols
 
     # ------------------------- results section (sketch) --------------------
-    active_name = (preset_sel if preset_sel != '— None Selected —'
-                   else (screener_sel if screener_sel != '— None Selected —'
-                         else 'Custom'))
+    # what actually screens the results (Combine picks + Filters panel) —
+    # not the dropdowns, which stay put after the panel is edited. Shared
+    # by the title, the export file names and the List-name default.
+    def _picks(p):
+        inc = [x for c in _cats for x in st.session_state.get(f'{p}_inc_{c}') or []]
+        exc = [x for c in _cats for x in st.session_state.get(f'{p}_exc_{c}') or []]
+        mode = st.session_state.get(f'{p}_mode', 'All (AND)')
+        return inc, exc, 'any' if mode.startswith('Any') else 'all'
+
+    _cur_s, _cur_a = _current_panel()
+    _loaded = [x for x in (preset_sel, dfil.MY_SCREENER_PREFIX + screener_sel)
+               if not x.endswith('— None Selected —')]
+    _panel = dfil.panel_label(_cur_s, _cur_a, _loaded)
+    if (active_list or (upload_syms and st.session_state.get('apply_upload'))) \
+            and '+f' not in _panel:
+        _panel += '+f'
+    active_name = dfil.screen_label([_picks('comb'), _picks('comb2')],
+                                    funnel=_funnel, panel=_panel)
     st.subheader(f'{active_name} – Results')
     sc1, sc2, sc3, sc4 = st.columns([2, 1, 2, 1])
     search = sc1.text_input('Search', key='search', placeholder='Ticker or name…')
@@ -832,20 +847,25 @@ if ACTIVE_TAB == 'all':
     d1, d2, d3 = st.columns([1, 1, 3])
     d1.download_button('Download CSV (all results)',
                        result.round(3).to_csv().encode(),
-                       file_name=f'filtered_{run.name}.csv')
+                       file_name=f'{active_name}_{run.name}.csv')
     d1.download_button('⭳ TradingView .txt (all)',
-                       _tv_txt(result, f'Filtered — {run.name}'),
-                       file_name=f'filtered_{run.name}.txt',
+                       _tv_txt(result, f'{active_name} — {run.name}'),
+                       file_name=f'{active_name}_{run.name}.txt',
                        mime='text/plain', help=_TV_HELP)
     if selected_tickers:
         d1.download_button('Download CSV (selected)',
                            result.loc[selected_tickers].round(3).to_csv().encode(),
-                           file_name=f'selected_{run.name}.csv')
+                           file_name=f'{active_name}_sel_{run.name}.csv')
         d1.download_button('⭳ TradingView .txt (selected)',
                            _tv_txt(result.loc[selected_tickers],
-                                   f'Selected — {run.name}'),
-                           file_name=f'selected_{run.name}.txt',
+                                   f'{active_name} (selected) — {run.name}'),
+                           file_name=f'{active_name}_sel_{run.name}.txt',
                            mime='text/plain', help=_TV_HELP)
+    # pre-fill with the screen label; follow it while the user hasn't typed
+    if st.session_state.get('save_list_name', '') in (
+            '', st.session_state.get('_auto_list_name')):
+        st.session_state['save_list_name'] = f'{active_name}_{run.name}'
+    st.session_state['_auto_list_name'] = f'{active_name}_{run.name}'
     list_name = d2.text_input('List name', key='save_list_name',
                               placeholder='list name…')
     save_selected = d2.button('Save SELECTED as list',

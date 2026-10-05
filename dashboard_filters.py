@@ -513,6 +513,136 @@ PRESET_CATEGORIES = {
 }
 
 
+# Preset -> short slug for TradingView watchlist / export file names and the
+# Screeners results title (screen_label). A preset missing here falls back to
+# slugify(name); validate.py flags it so the dictionary stays complete.
+PRESET_SLUGS = {
+    'Minervini 8/8 (liquid)': 'minervini',
+    'Weinstein 2A/2B not extended': 'stage2',
+    'CANSLIM C-A-I leaders': 'canslim',
+    'SCOOTER >= 90': 'sctr90',
+    'CANTATA CE leaders': 'cantata',
+    'Tight consolidation (RTI)': 'rti_tight',
+    'Leaders not extended (<= 2 ATR)': 'leaders_notext',
+    'Momentum Leader (Narrow)': 'mom_narrow',
+    'TW: Tight and orderly': 'tw_tight',
+    'TW: not extended': 'tw_notext',
+    'Large-cap uptrend pullback': 'lc_pullback',
+    'Stockbee 9M Movers': 'sb_9m',
+    'Stockbee 20% Weekly Movers': 'sb_weekly20',
+    'Stockbee 4% Daily Gainers': 'sb_daily4',
+    'Golden Launch Pad': 'glp',
+    'Qullamaggie Suite': 'qulla',
+    'ADL Accumulation': 'adl_accum',
+    '21dma-structure pullback': '21dma_pb',
+    'HVE last 50 bars': 'hve50',
+}
+LABEL_MAX = 60
+
+
+def slugify(name: str) -> str:
+    """'TW: Tight and orderly' -> 'tw_tight_and_orderly'."""
+    out = ''.join(c.lower() if c.isalnum() else '_' for c in str(name))
+    return '_'.join(p for p in out.split('_') if p)
+
+
+def screen_slug(label: str) -> str:
+    """Preset or 'My: <saved screener>' label -> short slug."""
+    if label.startswith(MY_SCREENER_PREFIX):
+        return slugify(label[len(MY_SCREENER_PREFIX):])
+    return PRESET_SLUGS.get(label) or slugify(label)
+
+
+def _norm(v):
+    """Compare panel values regardless of tuple/list and int/float."""
+    if isinstance(v, (tuple, list)):
+        return tuple(_norm(x) for x in v)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    return v
+
+
+def panel_state(spec: dict | None) -> tuple:
+    """(selections, advanced) the panel holds right after loading `spec`
+    (None = the clean Reset baseline), normalized for comparison."""
+    spec = spec or {}
+    sel = normalize_selections(spec.get('selections', {}))
+    adv = dict(ADVANCED_DEFAULTS)
+    adv.update({k: v for k, v in spec.get('advanced', {}).items()
+                if k in ADVANCED_DEFAULTS})
+    return ({k: _norm(v) for k, v in sel.items()},
+            {k: _norm(v) for k, v in adv.items()})
+
+
+def panel_label(sel: dict, adv: dict, loaded: list = ()) -> str:
+    """Filters-panel part of a screen label. `loaded` = the preset / 'My: …'
+    screener(s) selected in the dropdowns: one is named only while every
+    value it set is still in the panel (otherwise the dropdown is stale);
+    anything else off the clean baseline adds '+f'. '' = untouched panel."""
+    cur_s = {k: _norm(v) for k, v in normalize_selections(sel).items()}
+    cur_a = {k: _norm(adv.get(k, d)) for k, d in ADVANCED_DEFAULTS.items()}
+    base_s, base_a = panel_state(None)
+    for name in loaded:
+        spec = screen_spec(name)
+        if spec is None:
+            continue
+        ps, pa = panel_state(spec)
+        own_s = {k for k in ps if ps[k] != base_s[k]}
+        own_a = {k for k in pa if pa[k] != base_a[k]}
+        if all(cur_s[k] == ps[k] for k in own_s) and \
+                all(cur_a[k] == pa[k] for k in own_a):
+            extra = ({k for k in cur_s if cur_s[k] != ps[k]}
+                     | {k for k in cur_a if cur_a[k] != pa[k]})
+            return screen_slug(name) + ('+f' if extra else '')
+    off = cur_s != base_s or cur_a != base_a
+    return '+f' if off else ''
+
+
+def _level_label(include: list, exclude: list, mode: str, n: int) -> str:
+    """One Combine level: first `n` Include slugs joined by '_' (AND) or
+    '_or_' (OR), then 'not-<slug>' per Exclude; '+Kmore' when cut."""
+    slugs = ([screen_slug(x) for x in include]
+             + ['not-' + screen_slug(x) for x in exclude])
+    if not slugs:
+        return ''
+    inc = [screen_slug(x) for x in include]
+    joiner = '_or_' if (mode == 'any' and len(inc) > 1) else '_'
+    shown = slugs[:n]
+    head = joiner.join(s for s in shown if not s.startswith('not-'))
+    tail = '_'.join(s for s in shown if s.startswith('not-'))
+    out = '_'.join(p for p in (head, tail) if p)
+    if len(slugs) > n:
+        out += f'_+{len(slugs) - n}more'
+    return out
+
+
+def screen_label(levels: list, funnel: bool = True, panel: str = '') -> str:
+    """Readable short name of what is screening the results, for the
+    results title and TradingView / CSV file names, e.g.
+    'minervini_21dma_pb', 'minervini__rti_tight_or_glp+f', 'sctr90'.
+    `levels` = [(include, exclude, 'all'|'any'), ...] for the Combine
+    levels; levels are joined by '__' (Funnel) or '__or__' (Merge); the
+    Filters-panel part (panel_label) is ANDed on with '_' (or '+f').
+    Screens are dropped from the end ('+Kmore') past LABEL_MAX chars."""
+    total = max([len(i) + len(e) for i, e, _m in levels] or [0])
+
+    def build(n):
+        parts = [p for p in (_level_label(i, e, m, n) for i, e, m in levels) if p]
+        out = ('__' if funnel else '__or__').join(parts)
+        if panel.startswith('+'):
+            out += panel
+        elif panel:
+            out = f'{out}_{panel}' if out else panel
+        return out or 'all'
+
+    n = max(total, 1)
+    out = build(n)
+    while len(out) > LABEL_MAX and n > 1:
+        n -= 1
+        out = build(n)
+    return out
+
+
 def screen_categories() -> dict:
     """Category -> screen labels: PRESET_CATEGORIES, 'Other' for uncategorised
     presets, then 'My screeners' (saved, prefixed 'My: ') when any exist."""

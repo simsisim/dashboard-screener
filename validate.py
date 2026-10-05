@@ -222,6 +222,14 @@ def main():
                 shape_ok = False
                 shape_msgs.append(f'{pname}: dead advanced key {k}')
     check('preset shapes valid', shape_ok, '; '.join(shape_msgs[:3]) or 'all 8 presets')
+    # every preset has a watchlist-name slug, and slugs are unique
+    _no_slug = [p for p in dfil.PRESETS if p not in dfil.PRESET_SLUGS]
+    _vals = list(dfil.PRESET_SLUGS.values())
+    _dupes = sorted({v for v in _vals if _vals.count(v) > 1})
+    check('PRESET_SLUGS covers every preset, unique',
+          not _no_slug and not _dupes,
+          f'missing {_no_slug}; dupes {_dupes}' if _no_slug or _dupes
+          else f'{len(dfil.PRESETS)} slugs')
 
     # behavioral: every preset's mask == its hand-written manual equivalent
     # (bucket labels are INCLUSIVE lower bounds: '> 0%' means >= 0)
