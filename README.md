@@ -172,6 +172,16 @@ Saved days are kept, nothing older is touched. CANSLIM/CANTATA use today's funda
 snapshot for every past day. Backfilled movers use today's member lists
 (survivorship bias). Tests: `python3 test_top_movers.py`.
 
+## Ticker detail summary
+
+**📋 Ticker → Ticker detail** opens with a plain-language summary
+(`src/ticker_summary.py`, rule-based, thresholds `config.SUMMARY_*`), above the full
+metric table: price & trend, Confluence (today, days at ≥ 3 families in the last 20,
+badges gained / lost), volume records (HVE / HV1Y with the price move since, gap held,
+earnings day), S&P 500 / NASDAQ 100 rank over the last 5 sessions, and earnings
+(last report vs estimate, next date). Data: the screener run, `results/history.db`,
+`financial_data_0_5.csv`. Tests: `python3 test_ticker_summary.py`.
+
 ## Workflows tab
 
 **🧭 Workflows** (`src/workflow.py`, `config.WORKFLOWS`, `docs/workflows_tab.md`)

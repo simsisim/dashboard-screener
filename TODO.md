@@ -60,8 +60,8 @@ leaders, never to the whole universe.
 
 - [ ] Leaders' Lists tab doesn't show the CANTATA list (leaders_cantata.csv
       is written every run) — add it + a line in the info box.
-- [ ] "How … is built" info box for the remaining tabs (Confluence, Timing,
-      Patterns, Workflows, Ticker detail) — helpers `_how_built` /
+- [ ] "How … is built" info box for the remaining tabs (Timing, Patterns,
+      Workflows; Confluence done 2026-10-13) — helpers `_how_built` /
       `_universe_line` in dashboard.py.
 - [ ] Save "Combine screens" selections as a named screener.
 - [ ] 21dma-structure pullback: if the fixed ±2% window is noisy on
@@ -73,7 +73,8 @@ leaders, never to the whole universe.
 
 ## 5. Volume Records tab (metaVolume integration)
 
-- [ ] Filters: bring the Screener tab's full Filters panel into 3 Filters
+- [x] DONE 2026-10-13 (now step 4; shared `_filter_grid` / `_advanced_filters`
+      with key prefix `vrf_`). Filters: bring the Screener tab's full Filters panel into 3 Filters
       (today: a short tab-specific set — market cap, price, ADV, vs prior,
       index, sector, exclude funds). Needs its own session-key prefix: the
       Screener's `sel_*` widgets would otherwise change both tabs at once.
@@ -119,9 +120,15 @@ leaders, never to the whole universe.
         day 7; risk-on since Sep 18; momentum +1.86 sigma; 21d stretch
         +1.27 sigma. Some rules are ambiguous (which volatility, the +-0.25
         sigma flip) — expect a few iterations.
-- [ ] Second row of tabs once there are 2-3 Lab Report pages.
+- [x] Second row of tabs — DONE 2026-10-13 (group row / tab row / Presets
+      sub-row; `TAB_GROUPS` in dashboard.py).
 
-## 7. Ticker detail: readable summary (added 2026-10-13, not started)
+## 7. Ticker detail: readable summary — DONE 2026-10-13
+
+Done: `src/ticker_summary.py` (rules, thresholds `config.SUMMARY_*`), shown
+above the metric table in 📋 Ticker → Ticker detail; `test_ticker_summary.py`
+(11 checks). Original request below.
+
 
 The 📋 Ticker → Ticker detail tab shows one long metric dump that is hard to
 read. KEEP it as it is, and add above it an automatic plain-language summary

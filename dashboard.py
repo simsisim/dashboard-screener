@@ -32,6 +32,7 @@ from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 from src.focus import volume_records  # noqa: E402
 from src import leader_map  # noqa: E402
 from src.history_db import HistoryDB, repeat_table  # noqa: E402
+from src import ticker_summary  # noqa: E402
 
 st.set_page_config(page_title='Dashboard Screener',
                    layout='wide')
@@ -2022,10 +2023,31 @@ if ACTIVE_TAB == 'confluence':
             st.success(f'saved {len(_tk)} tickers to my_lists/{cf_ln.strip()}.csv')
 
 # ------------------------------------------------------------- detail -----
+@st.cache_data(ttl=600)
+def _fin_table() -> pd.DataFrame:
+    """Fundamentals snapshot (earnings dates / results) for the summary."""
+    try:
+        return data_loader.load_financial_data()
+    except OSError:
+        return pd.DataFrame()
+
+
 if ACTIVE_TAB == 'detail':
     ticker = st.selectbox('Ticker', sorted(full.index))
     if ticker:
         row = full.loc[ticker]
+        # readable summary first (TODO item 7); the full metric dump below
+        _fin = _fin_table()
+        _sections = ticker_summary.build(
+            ticker, row,
+            HistoryDB() if config.HISTORY_DB.exists() else None,
+            _fin.loc[ticker] if ticker in _fin.index else None)
+        with st.container(border=True):
+            st.markdown(f"#### {ticker} — {row.get('description', '')}")
+            _half = (len(_sections) + 1) // 2
+            for _col, _part in zip(st.columns(2), (_sections[:_half],
+                                                   _sections[_half:])):
+                _col.markdown(ticker_summary.to_markdown(_part))
         left, right = st.columns([1, 2])
         left.metric('Close', f"{row['close']:,.2f}")
         if 'scooter_score' in row:

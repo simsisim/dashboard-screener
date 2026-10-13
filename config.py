@@ -39,6 +39,13 @@ MOVERS_TOP_N = 10                    # dashboard default: top/bottom 10
 REPEAT_DAYS = 20                     # dashboard default window (sessions)
 HISTORY_CATCHUP_SESSIONS = 20        # each run fills missing days this far back
 
+# --- Ticker detail summary (src/ticker_summary.py, TODO.md item 7) ---
+SUMMARY_WINDOW = 20                  # Confluence history window (sessions)
+SUMMARY_MIN_FAMILIES = 3             # "at >= N families" in the summary
+SUMMARY_BADGE_LOOKBACK = 10          # badges gained / lost within N sessions
+SUMMARY_RECENT_RECORD_BARS = 20      # an HVE this recent is "recent"
+SUMMARY_RANK_SESSIONS = 5            # index ranks over the last N sessions
+
 # --- history requirements (trading days) ---
 # SCTR needs 210 (test_scooter.sctr_model.MIN_DAILY_BARS); Minervini/stage need
 # 200-SMA + 20d slope buffer (lkm_rs STAGE_DAILY_MIN_BARS) and 252-bar 52w H/L.
