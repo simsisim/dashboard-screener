@@ -108,7 +108,7 @@ Order Results by, Sort Order, "Showing 1 to N of M", per-row selection with
 download, and a **TradingView `.txt`** export (`EXCHANGE:SYMBOL`,
 comma-separated, `###` section divider — paste into TradingView's *Upload
 list…*; `dfil.tradingview_watchlist()`, offered on every results table:
-Leaders, Screener, Focus List, Confluence, Timing, Patterns, Workflows).
+Leaders, Screener, Focus List, Confluence, Patterns, Workflows).
 Advanced filters (stage, RS, RTI, leaders
 union/intersection, exchange, index) in a collapsible section. The
 **Re-run screeners** button executes `run_screeners.py` from the UI.
@@ -125,17 +125,19 @@ Filter/screener/preset/list conventions: see
 - Fundamentals: `data/fin_data/financial_data_0_8.csv` (snapshot; no network)
 - Shares outstanding: `data/market_data/shares_outstanding/*.csv`
 
-## Timing Signals & Patterns tabs (on-demand)
+## Timing signals (daily) & Patterns tab (on-demand)
 
-Two further tabs run **on demand** against a scoped subset (index
-membership + min market cap) — never in the daily batch:
-
-- **🕐 Timing Signals** — PVB state machine, ATR1 volatility-stop cloud,
-  Dr. Wish Blue/Black Dot (`src/timing/`). Scope → sources → ▶ Run with a
-  per-ticker progress bar; state filter + max-days-since; results persist
-  to `results/{date}/timing_signals_{scope}.csv` (same-day reuse).
-- **🌊 Patterns** — GLB Green Line Breakout (`src/patterns/glb.py`,
-  incremental per-ticker cache under `results/glb_cache/`, adjustable
+- **Timing signals** — PVB state machine, ATR1 volatility-stop cloud,
+  Dr. Wish Blue/Black Dot (`src/timing/`), computed for the whole universe
+  in the daily run (`src/timing/daily.py`; PVB/ATR1 keep incremental
+  per-ticker caches in `results/pvb_cache`, `results/atr1_cache` — ~9 s a
+  day warm, ~1.5 min cold). In the Screener: chip category **Timing**
+  (Blue / Black Dot ≤ 5 bars, PVB Buy ≤ 10, ATR1 Long cross ≤ 10) and
+  "bars since" filters; meant for level 2–4 of Combine screens, e.g.
+  leaders → Stage 2 → Blue Dot. Also the Confluence `timing` family.
+- **🌊 Patterns** — runs **on demand** against a scoped subset (index
+  membership + min market cap), never in the daily batch: GLB Green Line
+  Breakout (`src/patterns/glb.py`, incremental per-ticker cache under `results/glb_cache/`, adjustable
   pivot/lookback/confirmation) and Cup & Handle
   (`src/patterns/cup_handle.py`, Strict/Default/Loose parameter presets).
   Persist to `results/{date}/patterns_*.csv`.
@@ -164,7 +166,7 @@ of movers and the latest session's screen hits + Confluence counts.
 
 **Confluence → Last N days** reads `confluence_daily`: per ticker, on how many of the
 last N runs it met Min families / Must include family, sorted by that count, then
-streak. Batch badges only (no Patterns/Timing), so all days count the same way.
+streak. Batch badges only (no Patterns), so all days count the same way.
 Missed days fill themselves: every full run ends with a **catch-up** that computes the
 sessions of the last 20 (`config.HISTORY_CATCHUP_SESSIONS`) missing from `history.db`,
 each from the bars up to that date (~40 s/day; no `results/` files, no HVE ledger).

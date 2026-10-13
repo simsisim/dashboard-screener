@@ -26,6 +26,7 @@ Screening only — NOT backtesting (intro.md).
 """
 import argparse
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config
 from src import combine, confluence, data_loader, indicators, report
 from src.history_db import HistoryDB
+from src.timing import daily as timing_daily
 from src.focus import atr_extension, ma_structure, rti, stages, \
     volume_adx, volume_anomaly, volume_records
 from src.leaders import adl_accumulation, canslim, cantata, \
@@ -190,12 +192,30 @@ def _pass_through(argv) -> list:
     return rest
 
 
+_IN_AS_OF = False
+
+
 def run_as_of(days: list, argv=None) -> None:
-    """One --as-of run per day (prices loaded once) -> history.db."""
+    """One --as-of run per day (prices loaded once) -> history.db.
+
+    The PVB / ATR1 caches only move forward, so past days use their own
+    `<name>_asof` caches: wiped here, then filled day by day in date order
+    (first day cold, ~1.5 min; every later day warm)."""
+    global _IN_AS_OF
     rest = _pass_through(argv)
-    for i, day in enumerate(days, 1):
-        print(f'\n===== as of {day} ({i}/{len(days)}) =====')
-        main(rest + ['--as-of', day])
+    names = (config.PVB_CACHE_DIR_NAME, config.ATR1_CACHE_DIR_NAME)
+    for n in names:
+        shutil.rmtree(config.RESULTS_DIR / f'{n}_asof', ignore_errors=True)
+    config.PVB_CACHE_DIR_NAME, config.ATR1_CACHE_DIR_NAME = \
+        (f'{n}_asof' for n in names)
+    _IN_AS_OF = True
+    try:
+        for i, day in enumerate(sorted(days), 1):
+            print(f'\n===== as of {day} ({i}/{len(days)}) =====')
+            main(rest + ['--as-of', day])
+    finally:
+        config.PVB_CACHE_DIR_NAME, config.ATR1_CACHE_DIR_NAME = names
+        _IN_AS_OF = False
 
 
 def catch_up(argv=None) -> None:
@@ -240,6 +260,9 @@ def main(argv=None):
         return
     if args.catch_up:
         catch_up(argv)
+        return
+    if args.as_of and not _IN_AS_OF:      # standalone --as-of: as-of caches
+        run_as_of([args.as_of], argv)
         return
     if args.backfill_movers or args.movers_only:
         movers_step(None, args.backfill_movers or config.MOVERS_STORE_SESSIONS)
@@ -436,9 +459,12 @@ def main(argv=None):
                                            data['volume'])
         print(f'  -> adl={int(adl_df["in_adl_accumulation"].sum())}')
 
-        full = ctx.join([ext_df, stg_df, ma21s_df, rti_df, stb_df, glp_df, vadx_df,
-                         gmma_df, qulla_df, van_df, hve_df, hv1y_df, adl_df, ema20_df,
-                         dtrev_df], how='left')
+        parts = [ext_df, stg_df, ma21s_df, rti_df, stb_df, glp_df, vadx_df,
+                 gmma_df, qulla_df, van_df, hve_df, hv1y_df, adl_df, ema20_df,
+                 dtrev_df]
+        print('timing) Blue/Black Dot, PVB, ATR1 (incremental caches)...')
+        parts.append(timing_daily.evaluate(data))
+        full = ctx.join(parts, how='left')
 
         if not args.focus_only:
             full = full.join(min_df[['minervini_count']], how='left')

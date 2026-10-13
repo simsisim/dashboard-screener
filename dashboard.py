@@ -27,7 +27,6 @@ sys.path.insert(0, str(ROOT))
 import config  # noqa: E402  (module-root paths)
 from src import confluence, data_loader, on_demand, report  # noqa: E402
 from src import workflow as wf_engine  # noqa: E402
-from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 from src.focus import volume_records  # noqa: E402
 from src import leader_map  # noqa: E402
@@ -145,7 +144,6 @@ TABS = {
     'movers': '📈 Top Movers',
     'focus': '🎯 Focus List',
     'confluence': '🎖️ Confluence',
-    'timing': '🕐 Timing Signals',
     'patterns': '🌊 Patterns',
     'workflows': '🧭 Workflows',
     'detail': '📋 Ticker detail',
@@ -157,10 +155,12 @@ TABS = {
 # plain session state, which survives. Buttons, uploads, downloads and table
 # selections can't be written via session_state, so they are skipped.
 _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
+               'comb3_clear', 'comb4_clear', 'comb_add_level',
+               'comb_drop_level',
                'lists_uploader',
-               'ts_run', 'pt_run',
+               'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
-               'cf_save_sel', 'cf_save_top', 'cfh_save_list', 'ts_save_list', 'pt_save_list',
+               'cf_save_sel', 'cf_save_top', 'cfh_save_list', 'pt_save_list',
                'vr_save_list', 'vr_reset', 'vrd_peb', 'vrd_reset_btn',
                'mv_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
@@ -178,8 +178,8 @@ for _k in list(st.session_state.keys()):
 # the rows follow it, and each group / sub-row reopens its last-used tab.
 TAB_GROUPS = {
     '🔎 Screen': ['all', 'confluence', 'workflows', 'presets'],
-    '📡 Signals': ['timing', 'patterns', 'volume'],
-    '🌍 Market': ['movers'],
+    '📡 Signals': ['volume', 'patterns'],
+    '🌍 Market Movers': ['movers'],
     '📋 Ticker': ['detail', 'leadermap'],
 }
 TAB_SUBROWS = {'presets': ['leaders', 'focus']}
@@ -354,14 +354,32 @@ def _apply_preset(name: str):
         st.session_state[k] = v
 
 
+# timing-signal filter key -> its detail columns in the Screener results
+# (src/timing/daily.py; ages in trading bars, 0 = latest bar)
+TIMING_DETAIL = {
+    'blue_since': ['blue_dot_bars_since'],
+    'black_since': ['black_dot_bars_since'],
+    'pvb_buy_since': ['pvb_signal', 'pvb_signal_date', 'pvb_bars_since',
+                      'pvb_performance_since_signal'],
+    'atr1_long_since': ['atr1_trend', 'atr1_signal_type', 'atr1_signal_date',
+                        'atr1_bars_since', 'atr1_performance_since_signal',
+                        'atr1_stop_level'],
+}
+
+# Combine screens levels: session-state key prefix per level (level 1 =
+# 'comb'); levels 1-3 always shown, level 4 via '＋ Add level 4'
+COMB_PREFIXES = ('comb', 'comb2', 'comb3', 'comb4')
+COMB_MIN_LEVELS = 3
+
+
 def _reset_filters():
     """Runs as an on_click callback — i.e. BEFORE the widgets are
     instantiated on the next run, which is the only safe time to write
     widget-backed session_state keys."""
     _reset_panel()
     for k in [k for k in st.session_state
-              if str(k).startswith(('comb_inc_', 'comb_exc_',
-                                    'comb2_inc_', 'comb2_exc_'))]:
+              if str(k).startswith(tuple(f'{p}_{x}_' for p in COMB_PREFIXES
+                                         for x in ('inc', 'exc')))]:
         st.session_state[k] = []
     for k, default in {'search': '', 'my_list_sel': '— None Selected —',
                        'apply_upload': False,
@@ -370,8 +388,9 @@ def _reset_filters():
                        '_applied_preset': '— None Selected —',
                        '_applied_screener': '— None Selected —',
                        'save_as_name': '', 'save_list_name': '',
-                       'comb_mode': 'All (AND)', 'comb2_mode': 'All (AND)',
+                       **{f'{p}_mode': 'All (AND)' for p in COMB_PREFIXES},
                        'comb_levels': 'Funnel',
+                       'comb_n_levels': COMB_MIN_LEVELS,
                        '_flash': ''}.items():
         st.session_state[k] = default
 
@@ -506,6 +525,14 @@ def _advanced_filters(p: str = ''):
             _thresh_widget('hve_since', p)
         with v6:
             _thresh_widget('hv1y_since', p)
+        st.markdown('**Timing signals** — trading bars since the signal '
+                    '(0 = latest bar)')
+        t1, t2, t3, t4 = st.columns(4)
+        for _col, _k in zip((t1, t2, t3, t4), ('blue_since', 'black_since',
+                                               'pvb_buy_since',
+                                               'atr1_long_since')):
+            with _col:
+                _thresh_widget(_k, p)
 
 
 def _panel_selections(p: str = '') -> dict:
@@ -546,11 +573,12 @@ if ACTIVE_TAB == 'all':
     _how_built('ℹ️ How the Screener is built', [
         _universe_line(),
         'Every screen, preset and filter below narrows this universe. '
-        'Combine level 2 is optional: in <b>Funnel</b> mode it only screens '
-        'level 1’s survivors (level 1 AND level 2 — e.g. leaders with All '
-        '(AND), then Tight / not-extended with Any (OR)); in <b>Merge</b> mode '
-        'both levels screen the whole universe and are joined (level 1 OR '
-        'level 2). The Filters panel is ANDed on top of the result',
+        'Combine levels 2–4 are optional: in <b>Funnel</b> mode each level '
+        'only screens the survivors of the levels above it (level 1 AND 2 '
+        'AND 3 — e.g. leaders with Any (OR), then Tight with All (AND), then '
+        'Blue OR Black Dot); in <b>Merge</b> mode every level screens the whole '
+        'universe and the results are joined (level 1 OR 2 OR 3). Empty '
+        'levels are skipped. The Filters panel is ANDed on top of the result',
         _hve_line(),
     ])
     # ---------------- top bar: Presets | Lists | My Screener | My Lists ----
@@ -636,19 +664,21 @@ if ACTIVE_TAB == 'all':
     st.subheader('Combine screens')
     _cats = dfil.screen_categories()
     st.session_state.setdefault('comb_levels', 'Funnel')
+    st.session_state.setdefault('comb_n_levels', COMB_MIN_LEVELS)
     comb_levels = st.radio(
-        'Connect level 1 and level 2', ['Funnel', 'Merge'], key='comb_levels',
+        'Connect the levels', ['Funnel', 'Merge'], key='comb_levels',
         horizontal=True,
-        help='Funnel: level 2 only screens the tickers that survived level 1 '
-             '(level 1 AND level 2). Merge: both levels screen the whole '
-             'universe and their results are joined (level 1 OR level 2).')
+        help='Funnel: each level only screens the tickers that survived the '
+             'levels above it (level 1 AND level 2 AND …). Merge: every level '
+             'screens the whole universe and the results are joined '
+             '(level 1 OR level 2 OR …). Empty levels are skipped.')
 
     def _combine_level(p: str, n_pick: int, n_comb: int, level_label: str,
                        within: pd.Series | None = None):
         """One Pick + Combine block; `p` is the session-state key prefix
-        ('comb' = level 1, 'comb2' = level 2). `within` (level 1's result,
+        ('comb' = level 1, 'comb2' … 'comb4'). `within` (the levels above,
         Funnel mode) restricts the mask AND every per-screen count to the
-        tickers that survived the previous level. Chip picker like the
+        tickers that survived them. Chip picker like the
         StockCharts Screener: one '<p>_inc_<category>' / '<p>_exc_<category>'
         pills widget per category; the Include / Exclude sets are the union
         over categories (hidden categories' picks survive via the tab-bar
@@ -726,34 +756,58 @@ if ACTIVE_TAB == 'all':
                               on_click=_clear)
         return m, hits, bool(include or exclude)
 
-    comb_mask, comb_hits, _lvl1_on = _combine_level('comb', 1, 2, '')
-    # Funnel: level 2 screens only level 1's survivors (e.g. leaders
-    # intersected, then Tight OR not-extended within them). Merge: both
-    # levels screen the whole universe and the results are ORed.
+    # Funnel: each level screens only the survivors of the levels above
+    # (e.g. leaders, then Tight within them, then a dot within those).
+    # Merge: every level screens the whole universe; results are ORed.
     _funnel = comb_levels == 'Funnel'
-    _within = comb_mask if (_funnel and _lvl1_on) else None
-    if _within is not None:
-        _l2_label = f' — within the {int(comb_mask.sum())} tickers from level 1'
-    else:
-        _l2_label = ' — level 2' + ('' if _funnel else ' (merged with level 1)')
-    comb2_mask, comb2_hits, _lvl2_on = _combine_level(
-        'comb2', 3, 4, _l2_label, within=_within)
-    if _lvl2_on:
-        if not _lvl1_on:
-            comb_mask = comb2_mask         # an empty level 1 is all-True
-        elif _funnel:
-            comb_mask = comb2_mask         # already restricted to level 1
+    n_levels = st.session_state['comb_n_levels']
+    comb_mask = None                       # None = no level picked yet
+    comb_hits = pd.DataFrame(index=full.index)
+    _on = []
+    for _i, _p in enumerate(COMB_PREFIXES[:n_levels], 1):
+        _within = comb_mask if _funnel else None
+        if _i == 1:
+            _lbl = ''
+        elif _within is not None:
+            _lbl = (f' — level {_i}, within the {int(_within.sum())} tickers '
+                    'from the levels above')
         else:
-            comb_mask = comb_mask | comb2_mask
-        # a screen picked in both levels has the same mask — keep one column
+            _lbl = f' — level {_i}' + ('' if _funnel else ' (merged)')
+        _m, _h, _lvl_on = _combine_level(_p, 2 * _i - 1, 2 * _i, _lbl,
+                                         within=_within)
+        if not _lvl_on:
+            continue
+        _on.append(_i)
+        # Funnel: _m is already restricted to the levels above
+        comb_mask = _m if (comb_mask is None or _funnel) else comb_mask | _m
+        # a screen picked in two levels — keep one hits column
         comb_hits = pd.concat(
-            [comb_hits, comb2_hits.loc[:, ~comb2_hits.columns.isin(comb_hits.columns)]],
-            axis=1)
-        if _lvl1_on:
-            _op = 'AND' if _funnel else 'OR'
-            st.markdown(f'**Combine 1 {_op} Combine 2** → '
-                        f'**{int(comb_mask.sum())}** tickers '
-                        '(before the Filters panel)')
+            [comb_hits, _h.loc[:, ~_h.columns.isin(comb_hits.columns)]], axis=1)
+    if comb_mask is None:                  # nothing picked: all-True
+        comb_mask = pd.Series(True, index=full.index)
+    if len(_on) > 1:
+        _op = ' AND ' if _funnel else ' OR '
+        st.markdown(f'**{_op.join(f"Combine {i}" for i in _on)}** → '
+                    f'**{int(comb_mask.sum())}** tickers '
+                    '(before the Filters panel)')
+
+    def _add_level():
+        st.session_state['comb_n_levels'] = min(
+            len(COMB_PREFIXES), st.session_state['comb_n_levels'] + 1)
+
+    def _drop_level():
+        p = COMB_PREFIXES[st.session_state['comb_n_levels'] - 1]
+        for k in [k for k in st.session_state
+                  if str(k).startswith((f'{p}_inc_', f'{p}_exc_'))]:
+            st.session_state[k] = []
+        st.session_state['comb_n_levels'] -= 1
+
+    if n_levels < len(COMB_PREFIXES):
+        st.button(f'＋ Add level {n_levels + 1}', key='comb_add_level',
+                  on_click=_add_level)
+    else:
+        st.button(f'✕ Remove level {n_levels}', key='comb_drop_level',
+                  on_click=_drop_level, help='clears its picks')
     st.divider()
 
     # --------------------------- filter rows (sketch rows 1-4) ------------
@@ -842,6 +896,21 @@ if ACTIVE_TAB == 'all':
                  'adv50_dollar', 'avg_volume50', 'market_cap', 'exchange', 'sector',
                  'industry', 'index_membership',
                  'in_minervini', 'in_canslim', 'in_scooter', 'sources']
+    view_cols += [c for cols in TIMING_DETAIL.values() for c in cols]
+    # a timing signal in use — a Timing chip in any level (or a saved
+    # screener using it), or its filter in the panel — puts its detail
+    # columns right after hits / matched_by
+    _picked = [x for _p in COMB_PREFIXES[:n_levels] for c in _cats
+               for side in ('inc', 'exc')
+               for x in st.session_state.get(f'{_p}_{side}_{c}') or []]
+    _used = {k for x in _picked
+             for k, v in (dfil.screen_spec(x) or {}).get('selections', {}).items()
+             if v != 'All'}
+    _used |= {k for k in TIMING_DETAIL
+              if st.session_state.get(f'sel_{k}', 'All') != 'All'}
+    _front = [c for k, cols in TIMING_DETAIL.items() if k in _used
+              for c in cols]
+    view_cols = _front + [c for c in view_cols if c not in _front]
     view_cols = [c for c in view_cols if c in full.columns]
     mask &= comb_mask
     filtered = full[mask][view_cols]
@@ -873,7 +942,7 @@ if ACTIVE_TAB == 'all':
     if (active_list or (upload_syms and st.session_state.get('apply_upload'))) \
             and '+f' not in _panel:
         _panel += '+f'
-    active_name = dfil.screen_label([_picks('comb'), _picks('comb2')],
+    active_name = dfil.screen_label([_picks(p) for p in COMB_PREFIXES[:n_levels]],
                                     funnel=_funnel, panel=_panel)
     st.subheader(f'{active_name} – Results')
     sc1, sc2, sc3, sc4 = st.columns([2, 1, 2, 1])
@@ -1728,8 +1797,8 @@ if ACTIVE_TAB == 'focus':
 # --------------------------------------------------------- confluence ----
 # IMPLEMENTATION_PLAN.md §19 — badge-count leaders. Pure aggregation over the
 # daily batch's screener_results.csv (`full`); nothing here runs a screener.
-# On-demand pattern/timing badges are merged opportunistically from today's
-# cache when the Patterns/Timing tabs have already produced it.
+# On-demand pattern badges (DB, C&H) are merged opportunistically from
+# today's cache when the Patterns tab has already produced it.
 _CFL_CSS = """
 <style>
 .cfl-wrap { display:flex; flex-direction:column; gap:8px; }
@@ -1836,7 +1905,7 @@ def _confluence_history(scope, min_fam: int, must: list, days: int):
     st.caption(f'{len(sessions)} runs: {sessions[-1]} → {sessions[0]} · '
                f'{len(scope):,} tickers in scope · counted when ≥ {min_fam} '
                'families' + (f' incl. {", ".join(must)}' if must else '')
-               + ' · batch badges only (no Patterns/Timing)')
+               + ' · batch badges only (no Patterns)')
     if rows.empty:
         st.info('No ticker met the filters on any of these runs.')
         return
@@ -1894,9 +1963,9 @@ if ACTIVE_TAB == 'confluence':
         'at most 2 badges per family, normalised — a tie-breaker, not a '
         'backtested expectancy',
         'Stage 2A/2B/2C and the RTI zone show on the cards as faint context '
-        'pills, never counted. Pattern/timing badges (DB, C&H, PVB, ATR1, '
-        'blue/black dots) light up only when the Patterns / Timing tabs '
-        'have been run today',
+        'pills, never counted. Timing badges (PVB, ATR1, blue/black dots) are '
+        'computed in the daily run. Pattern badges (DB, C&H) light up only '
+        'when the Patterns tab has been run today',
         '<b>Scope</b> (index, min market cap), <b>Min families</b> and '
         '<b>Must include family</b> only filter the latest run — nothing is '
         'recomputed. Details: <code>docs/confluence.md</code>',
@@ -1912,8 +1981,8 @@ if ACTIVE_TAB == 'confluence':
     st.caption('Badge-count leaders — the names lit up by the most independent '
                'method *families*. Pure aggregation over the latest daily run '
                f'(`{run.name}`); press "Re-run screeners" above to refresh. '
-               'Pattern/timing badges (DB, C&H, PVB, ATR1, dots) appear only '
-               'when the Patterns/Timing tabs have been run today.')
+               'Pattern badges (DB, C&H) appear only when the Patterns tab '
+               'has been run today.')
 
     cf_mode = st.radio('Show', ['Today', 'Last N days'], key='cf_mode',
                        horizontal=True,
@@ -2075,71 +2144,7 @@ if ACTIVE_TAB == 'detail':
         st.dataframe(detail, use_container_width=True, height=560)
 
 
-# ------------------------------------------------- Timing Signals (on-demand)
-# feedback_4.md Task 4 — on-demand scoped computation, NOT the daily batch.
-# Shared scope/run/progress/persist plumbing lives in src/on_demand.py.
-
-TIMING_SOURCES = {
-    # ui label -> (module key, evaluate fn, state options)
-    'PVB': ('pvb', pvb.evaluate,
-            ['Buy', 'Sell', 'Close Buy', 'Close Sell', 'No Signal']),
-    'ATR1 Trend': ('atr1', atr1_cloud.evaluate,
-                   ['uptrend', 'downtrend']),
-    'Blue Dot': ('dots', drwish_dots.evaluate, ['Blue Dot']),
-    'Black Dot': ('dots', drwish_dots.evaluate, ['Black Dot']),
-}
-
-
-def _timing_long_table(combined: dict, current_close: pd.Series) -> pd.DataFrame:
-    """Per-source result frames -> one long row-per-(ticker, source) table."""
-    rows = []
-    for source_name, df in combined.items():
-        for t, r in df.iterrows():
-            cur = current_close.get(t)
-            if source_name == 'PVB':
-                rows.append({
-                    'ticker': t, 'source': 'PVB',
-                    'signal_state': r['pvb_signal'],
-                    'days_since': r['pvb_days_since_signal'],
-                    'signal_price': r['pvb_signal_price'],
-                    'current_price': cur,
-                    'pct_chg_since_signal': r['pvb_performance_since_signal'],
-                    'stop_level': None,
-                    'as_of': r.get('as_of'),
-                })
-            elif source_name == 'ATR1 Trend':
-                rows.append({
-                    'ticker': t, 'source': 'ATR1 Trend',
-                    'signal_state': r['atr1_trend'],
-                    'days_since': r.get('atr1_days_since_signal'),
-                    'signal_price': r.get('atr1_signal_price'),
-                    'current_price': cur,
-                    'pct_chg_since_signal': r.get('atr1_performance_since_signal'),
-                    'stop_level': r['atr1_stop_level'],
-                    'as_of': r.get('as_of'),
-                })
-            else:  # dots module — emit a row per dot that actually fired
-                # (the module is shared by the Blue/Black labels, so check
-                #  both columns no matter which label selected it)
-                for dot_name, col in (('Blue Dot', 'in_blue_dot'),
-                                      ('Black Dot', 'in_black_dot')):
-                    if bool(r.get(col, False)):
-                        rows.append({
-                            'ticker': t, 'source': dot_name,
-                            'signal_state': dot_name,
-                            'days_since': 0,
-                            'signal_price': cur,
-                            'current_price': cur,
-                            'pct_chg_since_signal': None,
-                            'stop_level': None,
-                            'as_of': r.get('as_of'),
-                        })
-    long_df = pd.DataFrame(rows)
-    if len(long_df):
-        long_df = long_df.set_index('ticker')
-    return long_df
-
-
+# sparkline closes for the on-demand Patterns tab
 @st.cache_data(show_spinner=False)
 def _spark_closes_ts(symbol: str, run_name: str):
     for stem in (symbol, symbol.replace('.', '-')):
@@ -2154,165 +2159,10 @@ def _spark_closes_ts(symbol: str, run_name: str):
     return None
 
 
-if ACTIVE_TAB == 'timing':
-    st.caption('On-demand timing signals — computed for the scoped subset '
-               'only (never part of the daily batch). Each row shows its '
-               'own as-of bar date.')
-
-    # ---------------- scope ----------------
-    ts1, ts2, _ts3 = st.columns([3, 2, 2])
-    ts_indexes = ts1.multiselect('Scope: index membership', index_choices(),
-                                 default=['S&P 500'], key='ts_index')
-    ts_cap = ts2.select_slider('Min market cap',
-                               options=[0, 300e6, 1e9, 2e9, 10e9],
-                               value=0, key='ts_cap',
-                               format_func=lambda v: f'${v:,.0f}')
-    if set(ts_indexes) & {'Russell 3000', 'NASDAQ Composite',
-                          'Mini-Russell 2000', 'STOXX Global 1800'}:
-        st.warning('Wide scope — may take longer.')
-    ts_sources = st.multiselect('Signal source', list(TIMING_SOURCES),
-                                default=['Blue Dot'], key='ts_sources')
-    ts_force = st.checkbox('Force re-run (ignore today\'s cache)',
-                           key='ts_force')
-
-    # the cache key must cover EVERY result-affecting input: scope AND the
-    # selected sources (switching Blue Dot -> PVB must not serve the old
-    # source's cached file — same class as the feedback_5 GLB key bug)
-    ts_key = on_demand.scope_key(ts_indexes, ts_cap)
-    if ts_sources:
-        ts_key += '_' + on_demand.sources_slug(ts_sources)
-    ts_run_dir = report.run_dir()
-
-    ts_run = st.button('▶ Run', key='ts_run',
-                       disabled=not (ts_sources and ts_indexes))
-
-    if ts_run:
-        # same-day cache reuse comes FIRST — a cached run skips the data
-        # load and the compute entirely (feedback_4.md: "check for it
-        # before running"); 'Force re-run' bypasses it
-        cached_ts = None
-        if not ts_force:
-            cached_ts = on_demand.load_cached(ts_run_dir, 'timing_signals',
-                                              ts_key)
-        if cached_ts is not None:
-            st.session_state['ts_results'] = cached_ts
-            st.session_state['ts_scope_key'] = ts_key
-            st.info('Reused today\'s cached run for this scope (tick '
-                    "'Force re-run' to recompute).")
-        else:
-            tickers = on_demand.resolve_scope(ts_indexes, ts_cap,
-                                              full['market_cap'])
-            if not tickers:
-                st.warning('Scope resolved to 0 tickers.')
-            else:
-                st.info(f'{len(tickers)} tickers in scope — loading data…')
-                data_ts = data_loader.load_price_matrices(
-                    tickers, use_batch=True, verbose=False)
-                # dedupe: Blue/Black Dot share one module
-                module_keys = {TIMING_SOURCES[s][0] for s in ts_sources}
-                sources = {}
-                for s in ts_sources:
-                    mkey, fn, _opts = TIMING_SOURCES[s]
-                    sources.setdefault(mkey, (s, fn))
-                bar = st.progress(0.0, text='Processing 0/'
-                                  f'{len(tickers)} tickers…')
-
-                def _cb(done, total):
-                    bar.progress(done / total,
-                                 text=f'Processing {done}/{total} tickers…')
-
-                combined = on_demand.run_scoped(
-                    tickers, data_ts,
-                    {k: v[1] for k, v in sources.items()}, _cb)
-                # run_scoped keys by module key ('atr1', 'dots', 'pvb') —
-                # the long-table builder branches on the UI label: rename
-                combined = {sources[k][0]: v for k, v in combined.items()}
-                bar.empty()
-                long_df = _timing_long_table(combined, full['close'])
-                p = on_demand.persist(ts_run_dir, 'timing_signals', ts_key,
-                                      long_df)
-                st.session_state['ts_results'] = long_df
-                st.session_state['ts_scope_key'] = ts_key
-                st.success(f'saved {p.name}')
-
-    # first visit to the tab (no Run clicked): show today's cached run
-    if not ts_run and not ts_force:
-        cached = on_demand.load_cached(ts_run_dir, 'timing_signals', ts_key)
-        if cached is not None:
-            st.session_state['ts_results'] = cached
-            st.session_state['ts_scope_key'] = ts_key
-
-    ts_results = st.session_state.get('ts_results')
-    ts_active_key = st.session_state.get('ts_scope_key')
-
-    # state filter + max-days render PERMANENTLY with a pre-registered
-    # session key (an appear/disappear widget breaks AppTest replay and
-    # UX alike); values are clamped to the available options each run
-    _all_states = ['Buy', 'Sell', 'Close Buy', 'Close Sell', 'No Signal',
-                   'uptrend', 'downtrend', 'Blue Dot', 'Black Dot']
-    _avail = (sorted(ts_results['signal_state'].unique())
-              if ts_results is not None and len(ts_results) else _all_states)
-    st.session_state['ts_states'] = [
-        s for s in st.session_state.get('ts_states', _avail) if s in _avail
-    ] or list(_avail)
-    f1, f2 = st.columns([2, 1])
-    ts_states = f1.multiselect('State filter', _avail, key='ts_states')
-    ts_max_days = f2.slider('Max days since signal', 0, 30, 10,
-                            key='ts_max_days',
-                            help='rows without a signal age (dots, '
-                                 'ATR1 trend) always pass')
-
-    if ts_results is not None and not len(ts_results):
-        st.info('Run completed: 0 signals fired in this scope for the '
-                'selected source(s).')
-    if ts_results is not None and len(ts_results):
-        if ts_active_key != ts_key:
-            st.caption(f"Showing the cached run for scope `{ts_active_key}` "
-                       f"(current scope `{ts_key}` — press ▶ Run to "
-                       f"recompute).")
-
-        view = ts_results
-        if ts_states:
-            view = view[view['signal_state'].isin(ts_states)]
-        if 'days_since' in view.columns:
-            days = pd.to_numeric(view['days_since'], errors='coerce')
-            view = view[days.isna() | (days <= ts_max_days)]
-
-        view = view.sort_values('days_since', ascending=False,
-                                na_position='last')
-        st.caption(f'{len(view):,} signal rows '
-                   f'(scope key `{ts_active_key}`)')
-        show = view.head(300).copy()
-        if len(show) <= 200:
-            show.insert(len(show.columns), 'spark',
-                        [_spark_closes_ts(t, run.name) for t in show.index])
-        st.dataframe(
-            show,
-            use_container_width=True,
-            height=min(120 + 32 * max(1, len(show)), 700),
-            column_config={
-                'spark': st.column_config.LineChartColumn('120d', width=170),
-            },
-        )
-        d1, d2, _d3 = st.columns([1, 1, 3])
-        d1.download_button('Download CSV', view.to_csv().encode(),
-                           file_name=f'timing_signals_{ts_key}_{run.name}.csv')
-        d1.download_button('⭳ TradingView .txt',
-                           _tv_txt(view, f'Timing · {ts_key}'),
-                           file_name=f'timing_signals_{ts_key}_{run.name}.txt',
-                           mime='text/plain', help=_TV_HELP)
-        ln = d2.text_input('List name', key='ts_list_name',
-                           placeholder='list name…')
-        if d2.button('Save as list', key='ts_save_list',
-                     disabled=not ln.strip()):
-            dfil.save_list(ln.strip(), view.index)
-            st.success(f'saved {len(view)} tickers to '
-                       f'my_lists/{ln.strip()}.csv')
-
 # --------------------------------------------------- Patterns (on-demand)
 # feedback_4.md Task 7 — pattern-geometry detectors with user-adjustable
 # parameters (GLB sliders; Cup & Handle named presets). Same shared
-# scope/Run/progress/persist plumbing as the Timing Signals tab.
+# scope/Run/progress/persist plumbing (src/on_demand.py).
 
 if ACTIVE_TAB == 'patterns':
     st.caption('On-demand pattern detectors — scoped computation; GLB '

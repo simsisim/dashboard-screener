@@ -50,7 +50,7 @@ its badges fire.
 | `accumulation` | volume / accumulation footprint | `ADL` `VOL` `SB9` `SBW` `SB4` |
 | `breakout` | base-breakout structure | `52H` `NrH` `DB` `C&H` |
 | `pullback` | re-entry into an existing trend | `EMA20` `REV` |
-| `timing` | on-demand daily trigger | `PVB` `ATR1` `blue` `black` |
+| `timing` | daily trigger | `PVB` `ATR1` `blue` `black` |
 
 `stage 2A/2B/2C` and the RTI zone render on the card as faint **context**
 pills — they are shown but never counted.
@@ -76,9 +76,9 @@ pills — they are shown but never counted.
 | `REV` | downtrend reversal | `in_downtrend_reversal` |
 | `DB` | Green-line breakout (Darvas-style) | on-demand — `patterns_glb_*` cache |
 | `C&H` | Cup & Handle | on-demand — `patterns_cup_handle_*` cache |
-| `PVB` | Price-Volume Breakout buy | on-demand — `timing_signals_*` cache |
-| `ATR1` | ATR1 cloud uptrend | on-demand — `timing_signals_*` cache |
-| `blue` `black` | Dr Wish blue / black dot | on-demand — `timing_signals_*` cache |
+| `PVB` | Price-Volume Breakout buy (state Buy) | `in_pvb_buy` |
+| `ATR1` | ATR1 cloud uptrend | `in_atr1_uptrend` |
+| `blue` `black` | Dr Wish blue / black dot on the latest bar | `in_blue_dot` / `in_black_dot` |
 
 Any badge whose source column is absent is simply left unlit — no error.
 
@@ -97,19 +97,20 @@ boolean sum. Milliseconds. Freshness is whatever the last daily batch was —
 shown in the caption; the header **"Re-run screeners"** button is the only
 way to refresh it, exactly as for the Focus and Leaders tabs.
 
-The 6 on-demand badges (`DB`, `C&H`, `PVB`, `ATR1`, `blue`, `black`) are the
+The timing badges (`PVB`, `ATR1`, `blue`, `black`) are daily-batch columns
+since 2026-10-13 (`src/timing/daily.py`; before that they came from the
+removed on-demand Timing tab). The 2 on-demand badges (`DB`, `C&H`) are the
 expensive detectors that only run against a scoped subset from the Patterns
-and Timing tabs. Confluence **does not run them**. It merges them
+tab. Confluence **does not run them**. It merges them
 *opportunistically*: `merge_ondemand()` scans today's run directory for
-`patterns_*` / `timing_signals_*` cache files and folds in whatever
-positives it finds. If you have not run those tabs today, those badges stay
+`patterns_*` cache files and folds in whatever positives it finds. If you have not run those tabs today, those badges stay
 unlit and the caption says `on-demand badges: none cached today`. This is
 deliberate — the tab is instant and never kicks off a minutes-long job.
 
 So, to the two framings of "where does the data come from":
 
 - **the batch badges** → the latest `screener_results.csv` already on disk
-- **the pattern/timing badges** → today's on-demand cache *if it exists*,
+- **the pattern badges** → today's on-demand cache *if it exists*,
   otherwise omitted
 
 ---
@@ -148,16 +149,16 @@ Circle/square colours step grey → green → amber → orange by value.
    sparkline, multi-row select, CSV download, and "Save top-N / SELECTED as
    list" (writes `my_lists/*.csv`).
 
-For the pattern/timing badges to appear, run the **Patterns** tab (GLB and
-Cup & Handle) and the **Timing** tab for a scope that covers the names you
-care about, on the same day.
+For the pattern badges to appear, run the **Patterns** tab (GLB and
+Cup & Handle) for a scope that covers the names you care about, on the
+same day.
 
 ---
 
 ## 6. Known limits
 
 - **On-demand badges are scope-dependent.** A name that would break out but
-  was not in the scope you ran Patterns/Timing against shows no `DB`/`C&H`
+  was not in the scope you ran Patterns against shows no `DB`/`C&H`
   badge. The merge is opportunistic, not exhaustive.
 - **`confluence_score` is a heuristic**, not a backtested expectancy. There
   is deliberately no AI-assigned "strike zone" number — that would be

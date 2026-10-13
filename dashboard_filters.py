@@ -108,7 +108,7 @@ THRESHOLD_FAMILIES = {
                   ('-2% to 0 (undercut)', (-2, 0)), ('±1%', (-1, 1)),
                   ('> +2% (extended)', (2.0001, None))],
     'bars_since': [('All', None), ('latest bar', (0, 0)), ('≤ 5 bars', (0, 5)),
-                   ('≤ 20 bars', (0, 20)), ('≤ 50 bars', (0, 50)),
+                   ('≤ 10 bars', (0, 10)), ('≤ 20 bars', (0, 20)), ('≤ 50 bars', (0, 50)),
                    ('> 50 bars', (51, None))],
 }
 
@@ -160,6 +160,14 @@ FILTER_SPECS = [
      'bars_since'),
     ('hv1y_since', 'Bars since HV1Y (1-year volume high)', 'hv1y_bars_since',
      'bars_since'),
+    # timing signals (src/timing/daily.py) — NaN = no signal / other state
+    ('blue_since', 'Bars since Blue Dot', 'blue_dot_bars_since', 'bars_since'),
+    ('black_since', 'Bars since Black Dot', 'black_dot_bars_since',
+     'bars_since'),
+    ('pvb_buy_since', 'Bars since PVB Buy (still Buy)', 'pvb_buy_bars_since',
+     'bars_since'),
+    ('atr1_long_since', 'Bars since ATR1 Long cross (still Long)',
+     'atr1_long_bars_since', 'bars_since'),
 ]
 SPEC_BY_KEY = {k: (label, col, fam) for k, label, col, fam in FILTER_SPECS}
 
@@ -201,6 +209,9 @@ def build_mask(df: pd.DataFrame, selections: dict,
         if rng is None:
             continue
         lo, hi = rng
+        if col not in df.columns:      # a run from before the column existed
+            clauses.append(pd.Series(False, index=df.index))
+            continue
         s = df[col]
         c = pd.Series(True, index=df.index)
         if lo is not None:
@@ -419,6 +430,21 @@ PRESETS = {
                        'mktcap': '> $300M (small+)'},
         'advanced': {},
     },
+    # timing signals (src/timing/daily.py) — meant to be combined, e.g.
+    # leaders in level 1, a dot in level 2; alone over the whole universe
+    # they are noise. Age: trading bars, 0 = the latest bar.
+    'Blue Dot ≤ 5 bars': {
+        'selections': {'blue_since': '≤ 5 bars'}, 'advanced': {},
+    },
+    'Black Dot ≤ 5 bars': {
+        'selections': {'black_since': '≤ 5 bars'}, 'advanced': {},
+    },
+    'PVB Buy ≤ 10 bars': {
+        'selections': {'pvb_buy_since': '≤ 10 bars'}, 'advanced': {},
+    },
+    'ATR1 Long cross ≤ 10 bars': {
+        'selections': {'atr1_long_since': '≤ 10 bars'}, 'advanced': {},
+    },
 }
 
 
@@ -510,6 +536,8 @@ PRESET_CATEGORIES = {
                'Qullamaggie Suite'],
     'Volume & accumulation': ['Stockbee 9M Movers', 'ADL Accumulation',
                               'HVE last 50 bars'],
+    'Timing': ['Blue Dot ≤ 5 bars', 'Black Dot ≤ 5 bars', 'PVB Buy ≤ 10 bars',
+               'ATR1 Long cross ≤ 10 bars'],
 }
 
 
@@ -536,6 +564,10 @@ PRESET_SLUGS = {
     'ADL Accumulation': 'adl_accum',
     '21dma-structure pullback': '21dma_pb',
     'HVE last 50 bars': 'hve50',
+    'Blue Dot ≤ 5 bars': 'blue5',
+    'Black Dot ≤ 5 bars': 'black5',
+    'PVB Buy ≤ 10 bars': 'pvb10',
+    'ATR1 Long cross ≤ 10 bars': 'atr1long10',
 }
 LABEL_MAX = 60
 

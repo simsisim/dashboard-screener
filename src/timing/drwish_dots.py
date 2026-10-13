@@ -16,7 +16,8 @@ Same-day snapshot shape (like Stockbee) — evaluated on the latest bar of
 each ticker's own history. `evaluate` takes an explicit ticker list (the
 scoped subset) per the on-demand architecture; each output row carries
 `as_of` — that ticker's own last valid bar date (mixed-data transparency,
-feedback_4 round decision).
+feedback_4 round decision). `dot_frames` gives the dots on every bar —
+the daily batch (src/timing/daily.py) reads "bars since the last dot".
 """
 import sys
 from pathlib import Path
@@ -54,6 +55,31 @@ def _last_valid_dates(frame: pd.DataFrame) -> pd.Series:
     return as_of
 
 
+def dot_frames(high, low, close, stoch=None):
+    """Blue / Black Dot on EVERY bar (Date x ticker bool frames) — the
+    daily batch reads "bars since the last dot" from these; evaluate()
+    reads their last row."""
+    if stoch is None:
+        stoch = stochastic_k(high, low, close, config.DRWISH_STOCH_PERIOD)
+
+    # Blue Dot: stoch crosses up through the threshold, SMA rising
+    sma_blue = indicators.sma(close, config.DRWISH_BLUE_SMA_PERIOD)
+    blue = ((stoch.shift(1) < config.DRWISH_BLUE_STOCH_THRESHOLD)
+            & (stoch > config.DRWISH_BLUE_STOCH_THRESHOLD)
+            & (sma_blue.diff() > 0))
+
+    # Black Dot: oversold within the lookback, closing higher, above SMA/EMA
+    sma_black = indicators.sma(close, config.DRWISH_BLACK_SMA_PERIOD)
+    ema_black = indicators.ema(close, config.DRWISH_BLACK_EMA_PERIOD)
+    lb = config.DRWISH_BLACK_LOOKBACK
+    was_oversold = (stoch.rolling(lb, min_periods=1).min()
+                    <= config.DRWISH_BLACK_STOCH_THRESHOLD)
+    closing_higher = close > close.shift(1)
+    trend_confirmed = (close > sma_black) | (close > ema_black)
+    black = was_oversold & closing_higher & trend_confirmed
+    return blue, black
+
+
 def evaluate(tickers: list, data: dict) -> pd.DataFrame:
     """
     tickers: the scoped subset (explicit argument — on-demand architecture).
@@ -66,30 +92,16 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
     stoch = stochastic_k(high, low, close, config.DRWISH_STOCH_PERIOD)
     stoch_today = _last(stoch)
     stoch_prev = _last(stoch.shift(1))
-
-    # Blue Dot
-    sma_blue = indicators.sma(close, config.DRWISH_BLUE_SMA_PERIOD)
-    sma_blue_rising = _last(sma_blue.diff() > 0)
-    blue = ((stoch_prev < config.DRWISH_BLUE_STOCH_THRESHOLD)
-            & (stoch_today > config.DRWISH_BLUE_STOCH_THRESHOLD)
-            & sma_blue_rising)
-
-    # Black Dot
-    sma_black = _last(indicators.sma(close, config.DRWISH_BLACK_SMA_PERIOD))
-    ema_black = _last(indicators.ema(close, config.DRWISH_BLACK_EMA_PERIOD))
     lb = config.DRWISH_BLACK_LOOKBACK
     stoch_lookback_min = stoch.iloc[-lb:].min()   # already per-ticker
-    was_oversold = stoch_lookback_min <= config.DRWISH_BLACK_STOCH_THRESHOLD
-    closing_higher = _last(close) > _last(close.shift(1))
-    trend_confirmed = (_last(close) > sma_black) | (_last(close) > ema_black)
-    black = was_oversold & closing_higher & trend_confirmed
 
+    blue, black = dot_frames(high, low, close, stoch)
     as_of = _last_valid_dates(close)
 
     out = pd.DataFrame(index=tickers)
     out.index.name = 'ticker'
-    out['in_blue_dot'] = blue.fillna(False).astype(bool)
-    out['in_black_dot'] = black.fillna(False).astype(bool)
+    out['in_blue_dot'] = _last(blue).fillna(False).astype(bool)
+    out['in_black_dot'] = _last(black).fillna(False).astype(bool)
     out['stoch_k'] = stoch_today.round(2)
     out['stoch_k_prev'] = stoch_prev.round(2)
     out['min_stoch_lookback'] = stoch_lookback_min.round(2)

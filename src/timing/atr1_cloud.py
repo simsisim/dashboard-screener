@@ -36,7 +36,8 @@ cross_dn need the *two* trailing bars of both stop lines, so (unlike
 PVB, one seed value is enough) the per-ticker JSON cache under
 results/{ATR1_CACHE_DIR_NAME}/{ticker}.json keeps state at both the
 `through` bar and `through - 1` for each of the two vol-stop lines,
-plus a through_close fingerprint (split/rewrite -> cold) and a
+plus a through_hash of every high/low/close bar up to `through` (split /
+rewrite / repaired bar -> cold) and a
 params_hash (threshold change -> cold). The Wilder-RMA seed only needs
 one trailing value — nothing reads its second-to-last value. The cache
 also carries `last_cross_date/type/price` (the most recent crossUp/
@@ -45,6 +46,7 @@ only when a NEW cross is found in the newly-computed region
 [through+1, n), otherwise carried unchanged, since a warm run can't
 rescan bars before the watermark (they're not reconstructed).
 """
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -59,6 +61,16 @@ import config
 def _params_hash(params: dict) -> str:
     return str(sorted((k, round(float(v), 6) if isinstance(v, (int, float))
                        else str(v)) for k, v in params.items()))
+
+
+def _history_hash(*arrays) -> str:
+    """Fingerprint of every input bar up to the cached one — a repaired /
+    backfilled bar anywhere in the past invalidates the cache, not just a
+    change of the last close."""
+    h = hashlib.blake2b(digest_size=16)
+    for a in arrays:
+        h.update(np.ascontiguousarray(a, dtype=float).tobytes())
+    return h.hexdigest()
 
 
 def _cache_path(ticker: str) -> Path:
@@ -224,7 +236,9 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
             through = cache.get('through', -1)
             l1, l2 = cache.get('line1'), cache.get('line2')
             valid_fp = (1 <= through < n
-                       and cache.get('through_close') == float(c_arr[through]))
+                       and cache.get('through_hash') == _history_hash(
+                           h_arr[:through + 1], l_arr[:through + 1],
+                           c_arr[:through + 1]))
             has_seeds = (l1 and l2 and l1.get('rma_seed') is not None
                         and l2.get('rma_seed') is not None
                         and l1.get('stop_seed2') is not None
@@ -280,7 +294,7 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
         _save_cache(t, phash, {
             'params_hash': phash,
             'through': n - 1,
-            'through_close': float(c_arr[-1]),
+            'through_hash': _history_hash(h_arr, l_arr, c_arr),
             'line1': _line_state(stop1, uptrend, max1, min1, atr1, n - 1),
             'line2': _line_state(stop2, uptrend2, max2, min2, atr2, n - 1),
             'last_cross_date': last_cross_date,

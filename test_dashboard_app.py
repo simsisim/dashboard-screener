@@ -19,7 +19,6 @@ validate.py (data-level) cannot:
 """
 import re
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -40,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 import dashboard_filters as dfil  # noqa: E402
-from src import on_demand, report  # noqa: E402
+from src import report  # noqa: E402
 
 PASS, FAIL = 'PASS', 'FAIL'
 results = []
@@ -255,46 +254,27 @@ def main():
           and len(at9.exception) == 0,
           f"sel_sector={ss(at9.session_state, 'sel_sector')}")
 
-    # ---- Timing Signals tab (feedback_4.md Task 4): on-demand run -----
-    at3 = _app('timing', 900)
+    # ---- timing signals in the Screener: 3-level funnel (leaders ->
+    # Stage 2 not extended -> Blue Dot), detail columns up front -------
+    _lead = ['Minervini 8/8 (liquid)', 'CANSLIM C-A-I leaders', 'SCOOTER >= 90']
+    _m1, _ = dfil.combine_screens(res, _lead, [], 'any')
+    _exp = int((_m1
+                & dfil.screen_mask(res, dfil.PRESETS['Weinstein 2A/2B not extended'])
+                & dfil.screen_mask(res, dfil.PRESETS['Blue Dot ≤ 5 bars'])).sum())
+    at3 = _app('all', 300)
+    at3.session_state['comb_inc_Leaders'] = _lead
+    at3.session_state['comb_mode'] = 'Any (OR)'
+    at3.session_state['comb2_inc_Trend & stage'] = ['Weinstein 2A/2B not extended']
+    at3.session_state['comb3_inc_Timing'] = ['Blue Dot ≤ 5 bars']
     at3.run()
-    check('timing tab: boot 0 exceptions', len(at3.exception) == 0)
-    for ms in at3.multiselect:
-        if ms.key == 'ts_index':
-            ms.set_value(['NASDAQ 100']).run()
-        if ms.key == 'ts_sources':
-            ms.set_value(['ATR1 Trend', 'Blue Dot', 'Black Dot']).run()
-    t0 = time.time()
-    for b in at3.button:
-        if b.label == '▶ Run':
-            b.click().run()
-    elapsed = time.time() - t0
-    check('timing tab: run completes without exceptions',
-          len(at3.exception) == 0)
-    caps3 = [c.value for c in at3.caption if 'signal rows' in str(c.value)]
-    check('timing tab: results rendered', bool(caps3),
-          caps3[-1][:60] if caps3 else 'no caption')
-    # feedback_5 regression: the filename MUST carry the source suffix
-    # (built via the shared slug helper, not re-implemented here)
-    _ts_sources = ['ATR1 Trend', 'Blue Dot', 'Black Dot']
-    expected_name = ('timing_signals_nasdaq100_cap0_'
-                     + on_demand.sources_slug(_ts_sources) + '.csv')
-    cache_p = report.run_dir() / expected_name
-    check('timing tab: scoped results persisted (source-suffixed)',
-          cache_p.exists(), f'expected {expected_name}')
-    stale_unsuffixed = report.run_dir() / 'timing_signals_nasdaq100_cap0.csv'
-    check('timing tab: no unsuffixed artifact recreated',
-          not stale_unsuffixed.exists(),
-          'stale pre-fix artifact must stay deleted')
-    # same-scope re-run reuses the persisted file (fast: no data reload
-    # for the full scope pass — bounded well under the cold run)
-    t0 = time.time()
-    for b in at3.button:
-        if b.label == '▶ Run':
-            b.click().run()
-    warm = time.time() - t0
-    check('timing tab: re-run stays fast (cache/scope bounded)',
-          warm < max(60.0, elapsed), f'cold={elapsed:.1f}s warm={warm:.1f}s')
+    _tot = [str(m.value) for m in at3.markdown if 'Combine 1 AND' in str(m.value)]
+    check('timing: 3-level funnel count == direct masks',
+          len(at3.exception) == 0 and bool(_tot) and f'**{_exp}**' in _tot[-1],
+          _tot[-1][:80] if _tot else 'no Combine total')
+    _tbl = [d.value for d in at3.dataframe if 'close' in d.value.columns]
+    _cols = list(_tbl[0].columns) if _tbl else []
+    check('timing: Blue Dot column moves to the front',
+          'blue_dot_bars_since' in _cols[:5], str(_cols[:5]))
 
     # ---- Patterns tab (feedback_4.md Tasks 5-7): GLB + Cup & Handle ----
     at4 = _app('patterns', 900)

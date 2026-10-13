@@ -8,10 +8,11 @@ union with a membership-count sort, NOT an intersection (an intersection of
 
 Pure aggregation over the daily batch's screener_results.csv (the dashboard's
 `full` DataFrame) — nothing here runs a screener or reads a bar file. The
-expensive on-demand pattern/timing signals (GLB, Cup & Handle, PVB, ATR1,
-Dr-Wish dots) are merged *opportunistically* by the dashboard from today's
-cache via `merge_ondemand()`; when a cache file is absent the badge is just
-left unlit.
+timing signals (PVB, ATR1, Dr-Wish dots) are daily-batch columns
+(src/timing/daily.py). The expensive on-demand patterns (GLB, Cup & Handle)
+are merged *opportunistically* by the dashboard from today's cache via
+`merge_ondemand()`; when a cache file is absent the badge is just left
+unlit.
 
 Ranking key: **n_families**, not n_badges — MM / KQ / GLP / GMMA-bullish /
 RS90 / SC all fundamentally need strong RS + stacked MAs + an uptrend, so a
@@ -29,17 +30,15 @@ FAMILY_COLORS = {
     'accumulation': '#14b8a6',   # teal    — volume / distribution-vs-accumulation
     'breakout':     '#22c55e',   # green   — base breakout structure
     'pullback':     '#a855f7',   # purple  — re-entry into an existing trend
-    'timing':       '#f97316',   # orange  — on-demand daily trigger
+    'timing':       '#f97316',   # orange  — daily trigger
 }
 FAMILIES = list(FAMILY_COLORS)
 
 # on-demand badges — not in the daily batch; merge_ondemand() supplies them
-ONDEMAND_CODES = {'DB', 'C&H', 'PVB', 'ATR1', 'blue', 'black'}
+ONDEMAND_CODES = {'DB', 'C&H'}
 # code -> the `in_*` column its test reads (so merge_ondemand can inject it)
 _ONDEMAND_COL = {
     'DB': 'in_glb_breakout', 'C&H': 'in_cup_handle',
-    'PVB': 'in_pvb_buy', 'ATR1': 'in_atr1_uptrend',
-    'blue': 'in_blue_dot', 'black': 'in_black_dot',
 }
 
 
@@ -107,6 +106,7 @@ BATCH_SOURCE_COLS = sorted({
     'in_volume_anomaly', 'in_9m_movers', 'in_weekly_movers', 'in_daily_gainers',
     'in_52w_high_breakout', 'pct_from_52w_high', 'in_ema20_pullback',
     'in_downtrend_reversal',
+    'in_pvb_buy', 'in_atr1_uptrend', 'in_blue_dot', 'in_black_dot',
 })
 
 
@@ -191,7 +191,7 @@ def rank(df: pd.DataFrame, by: str = 'n_families') -> pd.DataFrame:
 
 # ---------------------------------------------------- opportunistic merge --
 def merge_ondemand(run_dir, index) -> dict:
-    """Scan today's run dir for pattern/timing caches and lift the on-demand
+    """Scan today's run dir for pattern caches and lift the on-demand
     badge signals out of whatever files are present (union of positives).
     Returns {badge_code: bool Series aligned to `index`} for the families a
     cache actually covers — codes with no cache file are omitted entirely
@@ -232,25 +232,5 @@ def merge_ondemand(run_dir, index) -> dict:
             if cols and 'ticker' in d.columns:
                 tk |= set(d.loc[d[cols].astype(bool).any(axis=1), 'ticker'])
         extra['C&H'] = _series(tk)
-
-    tim_files = list(run_dir.glob('timing_signals_*.csv'))
-    if tim_files:
-        buckets = {'PVB': set(), 'ATR1': set(), 'blue': set(), 'black': set()}
-        for p in tim_files:
-            try:
-                d = pd.read_csv(p)
-            except Exception:
-                continue
-            if 'ticker' not in d.columns:
-                continue
-            src = d.get('source', pd.Series(index=d.index, dtype=str)).astype(str)
-            st = d.get('signal_state', pd.Series(index=d.index, dtype=str)).astype(str)
-            tkc = d['ticker']
-            buckets['PVB'] |= set(tkc[(src == 'PVB') & (st == 'Buy')])
-            buckets['ATR1'] |= set(tkc[(src == 'ATR1 Trend') & (st == 'uptrend')])
-            buckets['blue'] |= set(tkc[src == 'Blue Dot'])
-            buckets['black'] |= set(tkc[src == 'Black Dot'])
-        for code, tk in buckets.items():
-            extra[code] = _series(tk)
 
     return extra

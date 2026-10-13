@@ -165,8 +165,32 @@ Rule-based text (thresholds in config), not an LLM. Target format (NVDA,
     - Last report 2026-08-26: EPS 2.22 vs 2.09 expected, +6.2% surprise,
       +111% YoY. Next report: 2026-11-17.
 
-## 8. Navigation label (added 2026-10-13, not started)
+## 8. Navigation label — DONE 2026-10-13
 
-- [ ] First nav row: rename the group "🌍 Market" to "🌍 Market Movers"
+- [x] First nav row: rename the group "🌍 Market" to "🌍 Market Movers"
       (`TAB_GROUPS` in dashboard.py; also update the "Screener history lives
-      in Confluence" / README mentions of "Market").
+      in Confluence" / README mentions of "Market"). Only `TAB_GROUPS`
+      needed it — no other mentions found.
+
+## 9. Timing signals in the Screener (agreed 2026-10-13)
+
+Blue Dot alone over the whole universe is noise; on leaders / a list it is
+useful → compute the signals daily and filter them in the Screener.
+
+- [x] Step 1 — DONE 2026-10-13: `src/timing/daily.py` in `run_screeners.py`
+      (skipped for --as-of runs: PVB/ATR1 caches only move forward).
+      Columns `*_bars_since` (trading bars) + PVB/ATR1 state, date, perf.
+      Screener: category "Timing" (Blue Dot ≤ 5, Black Dot ≤ 5, PVB Buy ≤ 10,
+      ATR1 Long cross ≤ 10 bars) + "Timing signals" row in Advanced filters.
+      Cost: ~9 s/day with warm caches, ~95 s cold.
+- [x] Step 2 — DONE 2026-10-13: Combine screens shows levels 1–3, "＋ Add
+      level 4" / "✕ Remove level 4" (`COMB_PREFIXES` in dashboard.py); one
+      Funnel / Merge switch for the whole chain, empty levels skipped.
+- [x] Step 3 — DONE 2026-10-13: signal detail columns in the Screener
+      results (front when a Timing chip / filter is in use, `TIMING_DETAIL`
+      in dashboard.py); Timing Signals tab removed (src/on_demand.py stays
+      for Patterns). Confluence timing badges now read the daily `in_pvb_buy`
+      / `in_atr1_uptrend` / `in_blue_dot` / `in_black_dot` (same rules as
+      the tab); --as-of runs compute them too (own `*_asof` caches), and
+      history.db was backfilled 20 sessions so the history counts them on
+      every day.

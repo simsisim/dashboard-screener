@@ -30,12 +30,14 @@ depends only on bar i-1's, nothing else — so (unlike GLB, which has to
 rescan a trailing window because pivot confirmation depends on future
 bars) resuming here is just "keep looping from the cached state." Keeps a
 per-ticker JSON cache under results/{PVB_CACHE_DIR_NAME}/{ticker}.json:
-the loop-carried state (signal, sig_date, consec) plus a bar-count/
-close-price fingerprint (through/through_close) that invalidates the
-cache on a split/history-rewrite, and a params_hash that invalidates it
-on a threshold change. Same shape as src/patterns/glb.py's cache, applied
+the loop-carried state (signal, sig_date, consec) plus `through` and a
+hash of every close/volume bar up to it (through_hash) that invalidates the
+cache on a split / history rewrite / repaired bar, and a params_hash that
+invalidates it on a threshold change. A shorter history than the cache (an
+--as-of cut) also runs cold. Same shape as src/patterns/glb.py's cache, applied
 to a simpler (no rescan) problem.
 """
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -51,6 +53,16 @@ from src import indicators
 def _params_hash(params: dict) -> str:
     return str(sorted((k, round(float(v), 6) if isinstance(v, (int, float))
                        else str(v)) for k, v in params.items()))
+
+
+def _history_hash(*arrays) -> str:
+    """Fingerprint of every input bar up to the cached one — a repaired /
+    backfilled bar anywhere in the past invalidates the cache, not just a
+    change of the last close."""
+    h = hashlib.blake2b(digest_size=16)
+    for a in arrays:
+        h.update(np.ascontiguousarray(a, dtype=float).tobytes())
+    return h.hexdigest()
 
 
 def _cache_path(ticker: str) -> Path:
@@ -110,23 +122,18 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
         consec = 0
         start_i = 1
 
+        v = volume[t].to_numpy(dtype=float)
         cache = _load_cache(t, phash)
-        if cache is not None and cache.get('through', -1) < len(c) - 1:
-            through = cache['through']
-            if through < len(c) and cache.get('through_close') == float(c[through]):
-                signal, consec = cache['signal'], cache['consec']
-                sig_date = cache.get('sig_date')
-                sig_i = idx.get_loc(sig_date) if sig_date is not None \
-                    and sig_date in idx else None
-                start_i = through + 1
-            # else: fingerprint mismatch (split/rewrite) — fall through cold
-        elif cache is not None and cache.get('through', -1) >= len(c) - 1:
-            # no new bars since last cache — reuse the cached end-state directly
+        through = cache.get('through', -1) if cache is not None else -1
+        if (0 <= through < len(c) and cache.get('through_hash')
+                == _history_hash(c[:through + 1], v[:through + 1])):
             signal, consec = cache['signal'], cache['consec']
             sig_date = cache.get('sig_date')
             sig_i = idx.get_loc(sig_date) if sig_date is not None \
                 and sig_date in idx else None
-            start_i = len(c)   # skip the loop entirely
+            start_i = through + 1     # == len(c): no new bars, loop skipped
+        # else: no cache / params changed / history rewritten (split,
+        # repaired bar) / shorter history (--as-of cut) — run cold
 
         for i in range(start_i, len(c)):
             if np.isnan(s[i]) or np.isnan(ph[i - 1]):
@@ -158,7 +165,7 @@ def evaluate(tickers: list, data: dict) -> pd.DataFrame:
         _save_cache(t, phash, {
             'params_hash': phash,
             'through': len(c) - 1,
-            'through_close': float(c[-1]),
+            'through_hash': _history_hash(c, v),
             'signal': signal,
             'consec': int(consec),
             'sig_date': idx[sig_i].strftime('%Y-%m-%d') if sig_i is not None else None,
