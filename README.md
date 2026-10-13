@@ -82,6 +82,9 @@ python3 run_screeners.py --no-liquidity-gate
 python3 run_screeners.py --combine intersection
 python3 run_screeners.py --ticker AAPL      # single-ticker metric dump
 python3 run_screeners.py --limit 200        # debug on first N tickers
+python3 run_screeners.py --movers-only      # top movers only (~10 s)
+python3 run_screeners.py --backfill-movers  # movers for the last 250 sessions
+python3 run_screeners.py --backfill-hits    # screen hits from old results/ runs
 ```
 
 All thresholds live in `config.py` (single source of truth, provenance cited
@@ -136,6 +139,25 @@ membership + min market cap) — never in the daily batch:
 Every module carries per-row `as_of` dates (mixed-data transparency) and
 is covered by behavioral checks in `validate.py` /
 `test_dashboard_app.py`.
+
+## Top Movers tab
+
+**📈 Top Movers** (`src/leaders/top_movers.py`, `src/history_db.py`,
+`docs/top_movers_plan.md`) replaces `sandBox/cnbs`, since CNBC blocks automated access
+from 2026-10-10. Same ranked lists, computed from the downloadData_v1 daily bars.
+
+- **Movers** — S&P 500 / NASDAQ 100, any stored session: top and bottom N by % change
+  vs the previous close. Members: `downloadData_v1/data/tickers/sp500_tickers.csv`,
+  `nasdaq100_tickers.csv`. Dow 30: later.
+- **Repeat hits** — over the last N sessions, who made the top/bottom N of an index,
+  or passed any screener (every `in_*` flag): hits, hit %, current streak, avg % change,
+  first/last hit. CSV, TradingView `.txt` and save-as-list.
+- **Ticker history** — one ticker's daily rank in each index + the screeners it passed.
+
+Results only, in `results/history.db` (`mover_ranks`, `screen_hits`,
+`index_membership`). Every full run re-writes the last 5 sessions of movers and the
+latest session's screen hits. Backfilled movers use today's member lists
+(survivorship bias). Tests: `python3 test_top_movers.py`.
 
 ## Workflows tab
 

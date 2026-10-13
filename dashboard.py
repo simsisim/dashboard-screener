@@ -31,6 +31,7 @@ from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 from src.focus import volume_records  # noqa: E402
 from src import leader_map  # noqa: E402
+from src.history_db import HistoryDB  # noqa: E402
 
 st.set_page_config(page_title='Step-2 Filters — Leaders & Focus',
                    layout='wide')
@@ -143,6 +144,7 @@ TABS = {
     'leaders': '🏆 Leaders’ Lists',
     'all': '🔎 Screener',
     'volume': '🔊 Volume Records',
+    'movers': '📈 Top Movers',
     'focus': '🎯 Focus List',
     'confluence': '🎖️ Confluence',
     'timing': '🕐 Timing Signals',
@@ -161,7 +163,7 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'ts_run', 'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
                'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
-               'vr_save_list', 'lm_run', 'lm_upload',
+               'vr_save_list', 'mv_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
                'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
@@ -1089,6 +1091,131 @@ if ACTIVE_TAB == 'volume':
             dfil.save_list(ln.strip(), tbl.index)
             st.success(f'saved {len(tbl)} tickers to '
                        f'my_lists/{ln.strip()}.csv')
+
+# ----------------------------------------------------------- Top Movers ---
+# Ranked gainers/losers per index + repeat hits over the last N sessions,
+# read from results/history.db (docs/top_movers_plan.md). Written by
+# run_screeners.py (movers for every session, screen hits per run).
+MV_INDEX_NAMES = {'SP500': 'S&P 500', 'NASDAQ100': 'NASDAQ 100'}
+
+
+@st.cache_data(ttl=600)
+def _mv(method: str, *args):
+    """Cached HistoryDB read — one entry per (method, args)."""
+    return getattr(HistoryDB(), method)(*args)
+
+
+def _mv_context(tbl: pd.DataFrame) -> pd.DataFrame:
+    """symbol-indexed table + name/sector/industry from the screener run."""
+    ctx = full.reindex(tbl['symbol'])[['description', 'sector', 'industry']]
+    out = tbl.set_index('symbol').join(ctx)
+    out.index.name = 'ticker'
+    return out
+
+
+if ACTIVE_TAB == 'movers':
+    _how_built('ℹ️ How Top Movers are built', [
+        '<b>% change</b> = close vs the previous close, from the downloadData_v1 '
+        'daily bars, for every member of the index (member lists: '
+        '<code>downloadData_v1/data/tickers/sp500_tickers.csv</code> and '
+        '<code>nasdaq100_tickers.csv</code>). Rank 1 = biggest gainer (top) or '
+        'biggest loser (bottom)',
+        f'A session is skipped when fewer than {config.MOVERS_MIN_COVERAGE:.0%} '
+        'of the members have a bar. Past sessions use <i>today’s</i> member '
+        'lists (survivorship bias)',
+        '<b>Repeat hits</b>: over the last N sessions, how often a ticker made '
+        'the list. <b>Streak</b> = consecutive sessions up to the newest one. '
+        'Screener hits exist only for the days run_screeners.py ran',
+    ])
+    if not config.HISTORY_DB.exists() or not _mv('mover_dates', 'SP500'):
+        st.warning('No movers yet — run `python3 run_screeners.py '
+                   '--backfill-movers` once.')
+        st.stop()
+
+    mv_view = st.radio('View', ['Movers', 'Repeat hits', 'Ticker history'],
+                       key='mv_view', horizontal=True)
+
+    if mv_view == 'Movers':
+        c1, c2, c3 = st.columns([1, 1, 1])
+        mv_ix = c1.selectbox('Index', list(MV_INDEX_NAMES),
+                             format_func=MV_INDEX_NAMES.get, key='mv_ix')
+        mv_date = c2.selectbox('Session', _mv('mover_dates', mv_ix),
+                               key='mv_date')
+        mv_n = c3.number_input('Top / bottom N', 1, 100,
+                               config.MOVERS_TOP_N, key='mv_n')
+        g1, g2 = st.columns(2)
+        for col, side, title in ((g1, 'top', '▲ Gainers'),
+                                 (g2, 'bottom', '▼ Losers')):
+            tbl = _mv_context(_mv('movers', mv_date, mv_ix, int(mv_n), side))
+            col.markdown(f'**{title}** — {MV_INDEX_NAMES[mv_ix]}, {mv_date}')
+            col.dataframe(tbl, use_container_width=True,
+                          height=min(80 + 35 * len(tbl), 700),
+                          column_config={'change_pct': st.column_config.NumberColumn(
+                              '% chg', format='%+.2f')})
+
+    elif mv_view == 'Repeat hits':
+        sources = {f'{side} N · {name}': ('movers', ix, side)
+                   for ix, name in MV_INDEX_NAMES.items()
+                   for side in ('top', 'bottom')}
+        sources.update({f'screen · {sc}': ('screen', sc, None)
+                        for sc in _mv('screens')})
+        c1, c2, c3 = st.columns([2, 1, 1])
+        mv_src = c1.selectbox('Source', list(sources), key='mv_src',
+                              help='top/bottom N of an index, or any screener '
+                                   '(the in_* flags of each run)')
+        kind, key, side = sources[mv_src]
+        mv_days = c2.number_input('Last N sessions', 1, 250,
+                                  config.REPEAT_DAYS, key='mv_days')
+        mv_rn = c3.number_input('Top / bottom N', 1, 100, config.MOVERS_TOP_N,
+                                key='mv_rn', disabled=kind != 'movers')
+        if kind == 'movers':
+            rep = _mv('repeat_movers', key, int(mv_rn), side, int(mv_days))
+            label = f'{side}{int(mv_rn)}_{key}'
+        else:
+            rep = _mv('repeat_hits', key, int(mv_days))
+            rep = rep.drop(columns='avg_change_pct')
+            label = key
+        if rep.empty:
+            st.info('No hits in this window.')
+            st.stop()
+        tbl = _mv_context(rep)
+        st.caption(f'{len(tbl)} tickers · window: {int(tbl["sessions"].iloc[0])} '
+                   'sessions')
+        st.dataframe(tbl, use_container_width=True,
+                     height=min(120 + 35 * len(tbl), 700),
+                     column_config={
+                         'hit_rate': st.column_config.ProgressColumn(
+                             'hit %', format='%.0f%%', min_value=0, max_value=100),
+                         'avg_change_pct': st.column_config.NumberColumn(
+                             'avg % chg', format='%+.2f')})
+        _tag = f'repeat_{label}_last{int(mv_days)}'
+        d1, d2, _d3 = st.columns([1, 1, 3])
+        d1.download_button('Download CSV', tbl.to_csv().encode(),
+                           file_name=f'{_tag}_{run.name}.csv')
+        d1.download_button('⭳ TradingView .txt', _tv_txt(tbl, _tag),
+                           file_name=f'{_tag}_{run.name}.txt',
+                           mime='text/plain', help=_TV_HELP)
+        ln = d2.text_input('List name', key='mv_list_name',
+                           placeholder='list name…')
+        if d2.button('Save as list', key='mv_save_list',
+                     disabled=not ln.strip()):
+            dfil.save_list(ln.strip(), tbl.index)
+            st.success(f'saved {len(tbl)} tickers to my_lists/{ln.strip()}.csv')
+
+    else:
+        sym = st.text_input('Ticker', key='mv_sym').strip().upper()
+        if sym:
+            ranks = _mv('ticker_ranks', sym)
+            hits = _mv('ticker_hits', sym)
+            if ranks.empty and hits.empty:
+                st.info(f'{sym}: not in any index list or screener hit.')
+            t1, t2 = st.columns(2)
+            t1.markdown('**Rank in each index**')
+            t1.dataframe(ranks, use_container_width=True, hide_index=True,
+                         height=500)
+            t2.markdown('**Screeners passed**')
+            t2.dataframe(hits, use_container_width=True, hide_index=True,
+                         height=500)
 
 # ------------------------------------------ Where is each leader? --------
 # PrimeTrading Lab Report "Leaders Map" for a user list FILE (no presets):

@@ -25,6 +25,19 @@ FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_0_8.csv'
 
 RESULTS_DIR = SCREENERS_ROOT / 'results'
 
+# --- Top movers + repeat hits (docs/top_movers_plan.md) ---
+# results only, one SQLite: mover_ranks / screen_hits / index_membership
+HISTORY_DB = RESULTS_DIR / 'history.db'
+MOVERS_INDEXES = {                   # index_code -> member list (Dow 30: later)
+    'SP500': DOWNLOAD_ROOT / 'data' / 'tickers' / 'sp500_tickers.csv',
+    'NASDAQ100': DOWNLOAD_ROOT / 'data' / 'tickers' / 'nasdaq100_tickers.csv',
+}
+MOVERS_MIN_COVERAGE = 0.95           # skip a session if fewer members have a change
+MOVERS_STORE_SESSIONS = 5            # a normal run re-writes the last N sessions
+MOVERS_BACKFILL_SESSIONS = 250       # --backfill-movers default (~1 year)
+MOVERS_TOP_N = 10                    # dashboard default: top/bottom 10
+REPEAT_DAYS = 20                     # dashboard default window (sessions)
+
 # --- history requirements (trading days) ---
 # SCTR needs 210 (test_scooter.sctr_model.MIN_DAILY_BARS); Minervini/stage need
 # 200-SMA + 20d slope buffer (lkm_rs STAGE_DAILY_MIN_BARS) and 252-bar 52w H/L.

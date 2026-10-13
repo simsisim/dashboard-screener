@@ -16,9 +16,13 @@ Usage:
   python3 run_screeners.py --min-scooter 95 --min-rs 80 --stages 2A,2B
   python3 run_screeners.py --no-liquidity-gate
   python3 run_screeners.py --ticker AAPL      # single-ticker detail dump
+  python3 run_screeners.py --movers-only      # top movers only (~600 files)
+  python3 run_screeners.py --backfill-movers  # movers for the last 250 sessions
+  python3 run_screeners.py --backfill-hits    # screen hits from old results/ runs
 Screening only — NOT backtesting (intro.md).
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -27,11 +31,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config
 from src import combine, data_loader, indicators, report
+from src.history_db import HistoryDB
 from src.focus import atr_extension, ma_structure, rti, stages, \
     volume_adx, volume_anomaly, volume_records
 from src.leaders import adl_accumulation, canslim, cantata, \
     downtrend_reversal, ema20_pullback, gmma, gold_launch_pad, minervini, \
-    qullamaggie, scooter, stockbee_movers
+    qullamaggie, scooter, stockbee_movers, top_movers
 
 
 def parse_args(argv=None):
@@ -52,7 +57,74 @@ def parse_args(argv=None):
                    help='print the full metric row for one ticker')
     p.add_argument('--limit', type=int, default=None,
                    help='debug: only first N universe tickers')
+    p.add_argument('--movers-only', action='store_true',
+                   help='only write top movers to results/history.db')
+    p.add_argument('--backfill-movers', type=int, nargs='?', default=None,
+                   const=config.MOVERS_BACKFILL_SESSIONS, metavar='N',
+                   help='write movers for the last N sessions '
+                        f'(default {config.MOVERS_BACKFILL_SESSIONS}) and stop')
+    p.add_argument('--backfill-hits', action='store_true',
+                   help='load screen hits from every results/YYYY-MM-DD/ '
+                        'screener_results.csv and stop')
     return p.parse_args(argv)
+
+
+def movers_step(close: pd.DataFrame | None, sessions: int) -> None:
+    """Top movers for the last `sessions` -> history.db. Index members not
+    in `close` (or all of them, when close is None) are loaded here."""
+    members = top_movers.load_members()
+    wanted = sorted(set().union(*members.values()))
+    have = set() if close is None else set(close.columns)
+    need = [s for s in wanted if s not in have]
+    if need:
+        extra = data_loader.load_price_matrices(need, verbose=False)
+        close = (extra['close'] if close is None
+                 else close.join(extra['close'], how='outer'))
+        if extra['missing']:
+            print(f'  movers: no price file for {len(extra["missing"])} '
+                  f'members: {", ".join(extra["missing"][:10])}')
+    df = top_movers.evaluate(close, members, sessions)
+    if df.empty:
+        print('  movers: nothing written (no session with enough coverage)')
+        return
+    db = HistoryDB()
+    db.write_movers(df)
+    latest = df['snapshot_date'].max()
+    db.write_membership(latest, members)
+    bar = f'{close.index.max():%Y-%m-%d}'
+    print(f'  movers: {df["snapshot_date"].nunique()} sessions '
+          f'{df["snapshot_date"].min()} -> {latest}, {len(df)} rows -> '
+          f'{config.HISTORY_DB.name}')
+    if latest != bar:
+        print(f'  WARNING movers: latest bar {bar} skipped — fewer than '
+              f'{config.MOVERS_MIN_COVERAGE:.0%} of the members have it')
+
+
+def _run_bar_date(run: Path) -> str:
+    """Latest bar of a results/ run: the 'span' line of its dashboard.md
+    (the folder is named by run day, which can be a weekend)."""
+    md = run / 'dashboard.md'
+    if md.exists():
+        m = re.search(r'span: \S+ -> (\d{4}-\d{2}-\d{2})', md.read_text())
+        if m:
+            return m.group(1)
+    return run.name
+
+
+def write_hits(full: pd.DataFrame, bar_date: str) -> int:
+    flags = full[[c for c in full.columns if c.startswith('in_')]]
+    return HistoryDB().write_hits(bar_date, flags.astype('boolean'))
+
+
+def backfill_hits() -> None:
+    runs = sorted(d for d in config.RESULTS_DIR.glob('20??-??-??')
+                  if (d / 'screener_results.csv').exists())
+    for run in runs:                  # later run of the same bar date wins
+        full = pd.read_csv(run / 'screener_results.csv', index_col='ticker',
+                           low_memory=False)
+        bar = _run_bar_date(run)
+        n = write_hits(full, bar)
+        print(f'  hits: {run.name} (bar {bar}) -> {n} rows')
 
 
 def main(argv=None):
@@ -65,6 +137,13 @@ def main(argv=None):
         config.FOCUS_STAGES = tuple(s.strip() for s in args.stages.split(','))
     if args.no_liquidity_gate:
         config.APPLY_LIQUIDITY_GATE = False
+
+    if args.backfill_hits:
+        backfill_hits()
+        return
+    if args.backfill_movers or args.movers_only:
+        movers_step(None, args.backfill_movers or config.MOVERS_STORE_SESSIONS)
+        return
 
     universe = data_loader.load_universe()
     tickers = universe['Symbol'].tolist()
@@ -88,6 +167,9 @@ def main(argv=None):
         print('Fix in downloadData_v1 (main.py --repair-from DATE), then '
               're-run.')
         print('!' * 72 + '\n')
+
+    print('top movers per index -> history.db...')
+    movers_step(close, config.MOVERS_STORE_SESSIONS)
 
     # ---------- dashboard context metrics ----------
     print('computing dashboard context (MAs, 52w, momentum, RS)...')
@@ -277,6 +359,9 @@ def main(argv=None):
 
         out = report.run_dir()
         full.to_csv(out / 'screener_results.csv')
+        if args.limit is None:        # a partial universe must not clobber it
+            n = write_hits(full, f'{latest:%Y-%m-%d}')
+            print(f'screen hits -> history.db: {n} rows ({latest:%Y-%m-%d})')
         focus_df.to_csv(out / 'focus_list.csv')
 
     if not args.focus_only:

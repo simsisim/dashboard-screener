@@ -5,3 +5,6 @@ __pycache__/
 
 # volume-record ledger: rebuilt by run_screeners.py on every run
 volume_records/ledger/
+
+# top movers / repeat hits: rebuildable (run_screeners.py --backfill-movers / --backfill-hits)
+results/history.db
