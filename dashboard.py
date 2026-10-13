@@ -970,6 +970,12 @@ if ACTIVE_TAB == 'all':
 # run_screeners.py recomputes every run. HV1Y: rolling 1-year high, computed
 # every run (src/focus/volume_records.py).
 VR_SCREENS = ['HVE', 'HV1Y']
+# on-screen labels of the per-record columns, after the HVE / HV1Y prefix
+VR_LABELS = {'date': 'date', 'bars_since': 'days ago', 'records': 'count',
+             'vs_prior_pct': 'vol vs prev %', '1st_dch_pct': 'px day1 %',
+             '2nd_dch_pct': 'px day2 %', 'since_record_pct': 'px since %',
+             'range_since_pct': 'px range %', 'gap_held': 'gap held',
+             'earnings': 'on earnings'}
 VR_DIRECTIONS = ['Up & held', 'Up & faded', 'Down & bounced',
                  'Down & continued', 'Pending']
 _VRD_DEFAULTS = {'vrd_dir': [], 'vrd_er': False, 'vrd_min1st': 0.0,
@@ -1017,21 +1023,24 @@ if ACTIVE_TAB == 'volume':
         'N = 10 is the latest bar and the 9 before it. For HVE a window '
         'reaching back past the baseline cutoff also sees the baseline’s own '
         'records',
-        '<b>vs prior</b> = how far (%) the day beat the record before it '
-        '(HVE) or the highest of the year before it (HV1Y). <b>HVE records</b> '
+        'Column names: <b>HVE …</b> / <b>HV1Y …</b> = which record; '
+        '<b>vol</b> = volume, <b>px</b> = price. Only the record day uses '
+        'volume — every <b>px</b> column follows the price from then on',
+        '<b>vol vs prev %</b> = how far (%) the record day’s volume beat the '
+        'record before it (HVE) or the highest of the year before it (HV1Y). '
+        '<b>days ago</b> = trading days since the record day. <b>HVE count</b> '
         '= how many all-time records the ticker set inside the window',
-        '<b>1st dch %</b> = close on the record day vs the close the day '
-        'before. <b>2nd dch %</b> = close the day after vs the record day '
-        '(empty when the record is the latest bar). Volume says how much '
-        'traded, these say which way the price went',
+        '<b>px day1 %</b> = close on the record day vs the close the day '
+        'before. <b>px day2 %</b> = close the day after vs the record day '
+        '(empty when the record is the latest bar)',
         '<b>Direction</b> (step 3) judges each row on its HVE when it matched '
-        'HVE, else its HV1Y. Up/Down = 1st dch; held/faded, bounced/'
-        'continued = 2nd dch; Pending = record on the latest bar. '
-        '<b>since record %</b> = today vs the record-day close. <b>range '
-        'since %</b> = (highest high − lowest low since the record day) / '
+        'HVE, else its HV1Y. Up/Down = px day1; held/faded, bounced/'
+        'continued = px day2; Pending = record on the latest bar. '
+        '<b>px since %</b> = today’s close vs the record-day close. <b>px '
+        'range %</b> = (highest high − lowest low since the record day) / '
         'record close — small means a tight sideways base. <b>gap held</b> = '
         'every low after the record day stayed above the close before it. '
-        '<b>earnings</b> = the record day is a report date or the session '
+        '<b>on earnings</b> = the record day is a report date or the session '
         'after (reports after the close move the price next day), from '
         'qh*_date in financial_data_0_5.csv — empty when the ticker has no '
         'earnings history',
@@ -1119,9 +1128,9 @@ if ACTIVE_TAB == 'volume':
         d1c, d2c = st.columns([3, 1])
         d1c.pills('Record day → next day (empty = all)', VR_DIRECTIONS,
                   selection_mode='multi', key='vrd_dir',
-                  help='Up/Down = record-day close vs the day before (1st '
-                       'dch). Held/faded, bounced/continued = the next '
-                       'day (2nd dch). Pending = the record is the latest bar')
+                  help='Up/Down = record-day close vs the day before (px '
+                       'day1). Held/faded, bounced/continued = the next '
+                       'day (px day2). Pending = the record is the latest bar')
         d2c.button('▶ Post-earnings base', key='vrd_peb',
                    on_click=_vrd_post_earnings_base,
                    help='HV1Y on an earnings day, up ≥ 5%, gap held, now '
@@ -1132,14 +1141,14 @@ if ACTIVE_TAB == 'volume':
                     help='record day = an earnings date or the session after '
                          '(qh*_date in financial_data_0_5.csv)')
         e2.number_input('Record-day change ≥ (%)', -100.0, 100.0, step=1.0,
-                        key='vrd_min1st', help='1st dch %; 0 = off')
+                        key='vrd_min1st', help='px day1 %; 0 = off')
         e3.checkbox('Gap held', key='vrd_gap',
                     help='every low after the record day stayed above the '
                          'close before it')
-        e4.number_input('Since record within ± (%)', 0.0, 100.0, step=1.0,
+        e4.number_input('px since within ± (%)', 0.0, 100.0, step=1.0,
                         key='vrd_since', help='today vs the record-day close; '
                                               '0 = off')
-        e5.number_input('Range since ≤ (%)', 0.0, 500.0, step=1.0,
+        e5.number_input('px range ≤ (%)', 0.0, 500.0, step=1.0,
                         key='vrd_range', help='(highest high − lowest low '
                         'since the record day) / record close; 0 = off')
         _dmax = max(int(vr_n) - 1, 1)
@@ -1156,7 +1165,7 @@ if ACTIVE_TAB == 'volume':
     st.markdown('**4&nbsp;&nbsp;Filters**')
     with st.container(border=True):
         f1, f2, f3 = st.columns([1, 1, 1])
-        vr_min_vs = f1.number_input('vs prior ≥ (%)', 0.0, 1000.0, 0.0, 5.0,
+        vr_min_vs = f1.number_input('vol vs prev ≥ (%)', 0.0, 1000.0, 0.0, 5.0,
                                     key='vr_min_vs_prior',
                                     help='best of the matched screens; 0 = off')
         vr_nofunds = f2.checkbox('Exclude funds (Investment trusts)',
@@ -1258,13 +1267,21 @@ if ACTIVE_TAB == 'volume':
         if len(show) <= 200:
             show.insert(1, 'spark',
                         [_spark_closes(t, run.name) for t in show.index])
-        # display labels only (CSV keeps the plain names): percent columns
-        # get a % sign, e.g. hve_vs_prior_pct -> "hve_vs_prior %"
+        # display labels only (CSV keeps the plain names): record columns
+        # read "<HVE|HV1Y> <vol|px> …", other percent columns get a % sign
         _pct_cfg = {c: st.column_config.NumberColumn(
                         c[:-4] + ' %' if c.endswith('_pct') else c + ' %')
                     for c in show.columns
                     if (c.endswith('_pct') and c != 'rs_pct')   # rs = percentile
                     or c in ('gain_5d', 'gain_1m')}
+        for _x in VR_SCREENS:
+            _pre = _x.lower()
+            for _c, _lbl in VR_LABELS.items():
+                if f'{_pre}_{_c}' in show.columns:
+                    _pct_cfg[f'{_pre}_{_c}'] = (
+                        st.column_config.Column(f'{_x} {_lbl}')
+                        if _c in ('date', 'gap_held', 'earnings')
+                        else st.column_config.NumberColumn(f'{_x} {_lbl}'))
         st.dataframe(show, use_container_width=True,
                      height=min(120 + 35 * len(show), 700),
                      column_config={'spark': st.column_config.LineChartColumn(
