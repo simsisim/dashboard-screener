@@ -168,6 +168,83 @@ def evaluate(volume: pd.DataFrame, close: pd.DataFrame = None,
     return out, events, info
 
 
+def record_metrics(close: pd.DataFrame, high: pd.DataFrame,
+                   low: pd.DataFrame, dates: pd.Series, prefix: str,
+                   earnings: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Price behaviour around and since each ticker's record day (`dates`,
+    YYYY-MM-DD), all in % unless noted; NaN when a bar is missing:
+      {p}_1st_dch_pct      close(record day) / close(day before) - 1
+      {p}_2nd_dch_pct      close(day after) / close(record day) - 1
+                           (NaN: the record is the latest bar)
+      {p}_since_record_pct close(latest) / close(record day) - 1
+      {p}_range_since_pct  (highest high - lowest low, record day -> latest)
+                           / close(record day) — small = tight sideways base
+      {p}_gap_held         bool: every low AFTER the record day stayed above
+                           the close BEFORE it (the gap was not filled);
+                           NaN when the record is the latest bar
+      {p}_earnings         bool: the record day is an earnings date or the
+                           session after it (after-close reports move the
+                           price the next day) — `earnings` = ticker ×
+                           qh*_date columns
+    """
+    idx = close.index
+    n = len(idx)
+    tick = dates.index
+    C = close.reindex(columns=tick).to_numpy(dtype=float)
+    H = high.reindex(columns=tick).to_numpy(dtype=float)
+    L = low.reindex(columns=tick).to_numpy(dtype=float)
+    d = pd.to_datetime(dates)
+    pos = np.where(d.notna(), idx.searchsorted(d.fillna(idx[0])), -1)
+    ok = (pos >= 0) & (pos < n)
+    ok[ok] &= idx[pos[ok]] == d[ok].values             # date is a bar
+
+    cols = {k: np.full(len(tick), np.nan) for k in
+            ('1st', '2nd', 'since', 'range')}
+    gap = np.full(len(tick), np.nan)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        for j in np.flatnonzero(ok):
+            p = pos[j]
+            c0 = C[p, j]
+            if p >= 1:
+                cols['1st'][j] = c0 / C[p - 1, j] - 1
+            if p + 1 < n:
+                cols['2nd'][j] = C[p + 1, j] / c0 - 1
+                if p >= 1 and not np.isnan(C[p - 1, j]):
+                    lows = L[p + 1:, j]
+                    lows = lows[~np.isnan(lows)]
+                    if len(lows):
+                        gap[j] = float(lows.min() > C[p - 1, j])
+            last = C[p:, j][~np.isnan(C[p:, j])]
+            if len(last):
+                cols['since'][j] = last[-1] / c0 - 1
+            hh, ll = np.nanmax(H[p:, j]), np.nanmin(L[p:, j])
+            cols['range'][j] = (hh - ll) / c0
+
+    out = pd.DataFrame(index=tick)
+    out[f'{prefix}_1st_dch_pct'] = (cols['1st'] * 100).round(2)
+    out[f'{prefix}_2nd_dch_pct'] = (cols['2nd'] * 100).round(2)
+    out[f'{prefix}_since_record_pct'] = (cols['since'] * 100).round(2)
+    out[f'{prefix}_range_since_pct'] = (cols['range'] * 100).round(2)
+    out[f'{prefix}_gap_held'] = pd.array(
+        [pd.NA if np.isnan(g) else bool(g) for g in gap], dtype='boolean')
+
+    er = pd.array([pd.NA] * len(tick), dtype='boolean')
+    if earnings is not None and len(earnings.columns):
+        ed = earnings.reindex(tick)
+        flags = np.zeros(len(tick), dtype=bool)
+        for c in ed.columns:
+            e = pd.to_datetime(ed[c], errors='coerce')
+            # session of the report (a weekend date -> the next session)
+            epos = np.where(e.notna(), idx.searchsorted(e.fillna(idx[0])), -10)
+            lag = pos - epos
+            flags |= ok & e.notna().to_numpy() & (lag >= 0) & (lag <= 1)
+        has = ed.notna().any(axis=1).to_numpy()
+        er = pd.array([bool(f) if h else pd.NA for f, h in zip(flags, has)],
+                      dtype='boolean')
+    out[f'{prefix}_earnings'] = er
+    return out
+
+
 def evaluate_hv1y(volume: pd.DataFrame) -> pd.DataFrame:
     """HV1Y (Highest Volume in 1 Year), after metaVolume's hv1y_checker:
     the highest-volume bar of the trailing config.HV1Y_BARS bars. Rolling,

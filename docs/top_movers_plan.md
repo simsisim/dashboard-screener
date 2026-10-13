@@ -105,6 +105,14 @@ Warn and skip if the latest bar is missing for > 5% of index members (same idea 
 - Disable the GitHub Action, archive `simsisim/cnbc-markets` (asks first — changes the GitHub repo).
 - README: replace the alternatives section with a short "retired, moved to dashboard-screener" note.
 
+## Added 2026-10-13: Confluence history
+
+`confluence_daily(snapshot_date, symbol, n_families, n_badges, confluence_score,
+families, badges)` — every run, batch badges only, tickers with ≥ 1 badge. Confluence
+tab → **Last N days**: tickers ranked by how many of the last N runs they met the
+filters. Backfilled from the saved runs. The screener entries in Top Movers → Repeat
+hits were removed (Confluence covers them).
+
 ## Later / not now
 
 - Dow 30 (needs a `dow30_tickers.csv` in downloadData_v1).

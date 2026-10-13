@@ -200,7 +200,7 @@ def check_missing_days(data: dict, lookback: int = 60,
 
 
 def load_financial_data() -> pd.DataFrame:
-    """CANSLIM fundamentals snapshot (financial_data_0_8.csv), ticker-indexed."""
+    """Fundamentals snapshot (config.FIN_DATA_CSV), ticker-indexed."""
     df = pd.read_csv(config.FIN_DATA_CSV, low_memory=False)
     return df.set_index('ticker')
 

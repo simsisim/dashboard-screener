@@ -12,6 +12,7 @@ Covers:
   4. write_movers / write_hits replace a session (idempotent re-run)
   5. repeat_table: hits, hit rate, streak, avg change
   6. index_membership keeps first_seen / extends last_seen
+  7. write_confluence / confluence_window
 """
 import sys
 import tempfile
@@ -95,6 +96,20 @@ with tempfile.TemporaryDirectory() as tmp:
     check('write_hits replaces the session; screen name without in_',
           hits.symbol.tolist() == ['AAA'] and db.screens() == ['x', 'y'],
           hits.to_string())
+
+    cf = pd.DataFrame({'n_families': [3, 0], 'n_badges': [4, 0],
+                       'confluence_score': [40.0, 0.0],
+                       'families': [['trend_rs', 'breakout', 'timing'], []],
+                       'badges': [['MM', 'SC', '52H', 'PVB'], []]},
+                      index=['AAA', 'BBB'])
+    db.write_confluence('2026-10-06', cf)
+    db.write_confluence('2026-10-06', cf)          # re-run replaces
+    db.write_confluence('2026-10-07', cf)
+    rows, sess = db.confluence_window(1)
+    check('write_confluence: no-badge tickers skipped, window = last N runs',
+          sess == ['2026-10-07'] and rows.symbol.tolist() == ['AAA']
+          and rows.families.iloc[0] == 'trend_rs,breakout,timing',
+          rows.to_string())
 
     db.write_membership('2026-10-06', {'IX': ['AAA']})
     db.write_membership('2026-10-01', {'IX': ['AAA']})

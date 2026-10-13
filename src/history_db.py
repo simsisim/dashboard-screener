@@ -5,6 +5,8 @@ History DB — results only, for top movers and repeat hits
   mover_ranks       every index member's daily % change + rank (top/bottom)
   screen_hits       which ticker passed which screener (the in_* flags)
   index_membership  first/last session a ticker was seen in an index
+  confluence_daily  each ticker's Confluence families/badges per session
+                    (batch badges only; tickers with no badge not stored)
 
 Writes replace a whole session (delete + insert), so re-running a day is
 safe and a ticker that left an index doesn't linger. Repeat-hit maths
@@ -34,6 +36,16 @@ CREATE TABLE IF NOT EXISTS screen_hits (
     screen        TEXT NOT NULL,
     symbol        TEXT NOT NULL,
     PRIMARY KEY (snapshot_date, screen, symbol)
+);
+CREATE TABLE IF NOT EXISTS confluence_daily (
+    snapshot_date    TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    n_families       INTEGER,
+    n_badges         INTEGER,
+    confluence_score REAL,
+    families         TEXT,             -- comma-separated
+    badges           TEXT,             -- comma-separated
+    PRIMARY KEY (snapshot_date, symbol)
 );
 CREATE TABLE IF NOT EXISTS index_membership (
     index_code TEXT NOT NULL,
@@ -91,6 +103,20 @@ class HistoryDB:
             c.executemany('INSERT INTO screen_hits VALUES (?, ?, ?)', rows)
         return len(rows)
 
+    def write_confluence(self, snapshot_date: str, cf: pd.DataFrame) -> int:
+        """Replace one session from confluence.compute() output (ticker
+        index; `families` / `badges` are lists)."""
+        cf = cf[cf['n_badges'] > 0]
+        rows = [(snapshot_date, str(t), int(r.n_families), int(r.n_badges),
+                 float(r.confluence_score), ','.join(r.families),
+                 ','.join(r.badges)) for t, r in cf.iterrows()]
+        with self._conn() as c:
+            c.execute('DELETE FROM confluence_daily WHERE snapshot_date = ?',
+                      (snapshot_date,))
+            c.executemany('INSERT INTO confluence_daily VALUES '
+                          '(?, ?, ?, ?, ?, ?, ?)', rows)
+        return len(rows)
+
     def write_membership(self, snapshot_date: str, members: dict) -> None:
         rows = [(code, s, snapshot_date, snapshot_date)
                 for code, syms in members.items() for s in syms]
@@ -110,6 +136,20 @@ class HistoryDB:
     def hit_dates(self) -> list:
         return self._query('SELECT DISTINCT snapshot_date FROM screen_hits '
                            'ORDER BY snapshot_date DESC')['snapshot_date'].tolist()
+
+    def confluence_dates(self) -> list:
+        return self._query('SELECT DISTINCT snapshot_date FROM confluence_daily '
+                           'ORDER BY snapshot_date DESC')['snapshot_date'].tolist()
+
+    def confluence_window(self, days: int) -> tuple:
+        """(rows, sessions) for the last `days` stored sessions, newest
+        session first."""
+        sessions = self.confluence_dates()[:days]
+        if not sessions:
+            return pd.DataFrame(), []
+        rows = self._query('SELECT * FROM confluence_daily '
+                           'WHERE snapshot_date >= ?', (min(sessions),))
+        return rows, sessions
 
     def screens(self) -> list:
         return self._query('SELECT DISTINCT screen FROM screen_hits '

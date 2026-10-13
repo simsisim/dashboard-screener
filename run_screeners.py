@@ -18,7 +18,10 @@ Usage:
   python3 run_screeners.py --ticker AAPL      # single-ticker detail dump
   python3 run_screeners.py --movers-only      # top movers only (~600 files)
   python3 run_screeners.py --backfill-movers  # movers for the last 250 sessions
-  python3 run_screeners.py --backfill-hits    # screen hits from old results/ runs
+  python3 run_screeners.py --backfill-hits    # screen hits + Confluence from old runs
+  python3 run_screeners.py --catch-up         # fill missing days of the last 20 only
+  python3 run_screeners.py --backfill-days 60 # recompute the last 60 sessions as of
+                                              # each day -> history.db only
 Screening only — NOT backtesting (intro.md).
 """
 import argparse
@@ -30,7 +33,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config
-from src import combine, data_loader, indicators, report
+from src import combine, confluence, data_loader, indicators, report
 from src.history_db import HistoryDB
 from src.focus import atr_extension, ma_structure, rti, stages, \
     volume_adx, volume_anomaly, volume_records
@@ -63,9 +66,19 @@ def parse_args(argv=None):
                    const=config.MOVERS_BACKFILL_SESSIONS, metavar='N',
                    help='write movers for the last N sessions '
                         f'(default {config.MOVERS_BACKFILL_SESSIONS}) and stop')
+    p.add_argument('--as-of', type=str, default=None, metavar='YYYY-MM-DD',
+                   help='evaluate on bars up to this date; writes ONLY '
+                        'history.db (no results/ files, no HVE ledger, no movers)')
+    p.add_argument('--backfill-days', type=int, default=None, metavar='N',
+                   help='run --as-of for each of the last N sessions (prices '
+                        'loaded once). Fundamentals are today\'s snapshot')
+    p.add_argument('--catch-up', action='store_true',
+                   help='only fill missing sessions of the last '
+                        f'{config.HISTORY_CATCHUP_SESSIONS} into history.db '
+                        '(a full run does this at the end anyway)')
     p.add_argument('--backfill-hits', action='store_true',
-                   help='load screen hits from every results/YYYY-MM-DD/ '
-                        'screener_results.csv and stop')
+                   help='load screen hits + Confluence counts from every '
+                        'results/YYYY-MM-DD/screener_results.csv and stop')
     return p.parse_args(argv)
 
 
@@ -111,9 +124,14 @@ def _run_bar_date(run: Path) -> str:
     return run.name
 
 
-def write_hits(full: pd.DataFrame, bar_date: str) -> int:
+def write_hits(full: pd.DataFrame, bar_date: str) -> tuple:
+    """Screen flags + Confluence counts (batch badges only, so every
+    session is counted the same way) -> history.db."""
+    db = HistoryDB()
     flags = full[[c for c in full.columns if c.startswith('in_')]]
-    return HistoryDB().write_hits(bar_date, flags.astype('boolean'))
+    n_hits = db.write_hits(bar_date, flags.astype('boolean'))
+    n_cf = db.write_confluence(bar_date, confluence.compute(full, None))
+    return n_hits, n_cf
 
 
 def backfill_hits() -> None:
@@ -123,8 +141,84 @@ def backfill_hits() -> None:
         full = pd.read_csv(run / 'screener_results.csv', index_col='ticker',
                            low_memory=False)
         bar = _run_bar_date(run)
-        n = write_hits(full, bar)
-        print(f'  hits: {run.name} (bar {bar}) -> {n} rows')
+        n, n_cf = write_hits(full, bar)
+        print(f'  hits: {run.name} (bar {bar}) -> {n} screen hits, '
+              f'{n_cf} confluence rows')
+
+
+_PRICE_CACHE = {}
+
+
+def _load_prices(tickers: list) -> dict:
+    """load_price_matrices, memoised per ticker list — a backfill loads the
+    ~4,000 files once, not once per session."""
+    key = tuple(tickers)
+    if key not in _PRICE_CACHE:
+        _PRICE_CACHE[key] = data_loader.load_price_matrices(tickers)
+    return _PRICE_CACHE[key]
+
+
+def _as_of(data: dict, day: str) -> dict:
+    """The price matrices cut at `day` (inclusive), as a run on that day
+    would have seen them."""
+    out = dict(data)
+    for k in ('open', 'high', 'low', 'close', 'volume'):
+        out[k] = data[k].loc[:day]
+    return out
+
+
+def _sessions(n: int) -> list:
+    """The last `n` sessions with a bar for most of the universe
+    (skips holes / holidays), as YYYY-MM-DD."""
+    universe = data_loader.load_universe()
+    close = _load_prices(universe['Symbol'].tolist())['close']
+    live = close.notna().sum(axis=1)
+    return [f'{d:%Y-%m-%d}' for d in close.index[live >= 0.8 * live.max()][-n:]]
+
+
+def _pass_through(argv) -> list:
+    """argv minus the backfill / catch-up flags (thresholds etc. stay)."""
+    rest, skip = [], False
+    for a in (argv if argv is not None else sys.argv[1:]):
+        if skip:
+            skip = False
+        elif a in ('--backfill-days', '--as-of'):
+            skip = True
+        elif a != '--catch-up' and not a.startswith(('--backfill-days=',
+                                                     '--as-of=')):
+            rest.append(a)
+    return rest
+
+
+def run_as_of(days: list, argv=None) -> None:
+    """One --as-of run per day (prices loaded once) -> history.db."""
+    rest = _pass_through(argv)
+    for i, day in enumerate(days, 1):
+        print(f'\n===== as of {day} ({i}/{len(days)}) =====')
+        main(rest + ['--as-of', day])
+
+
+def catch_up(argv=None) -> None:
+    """Fill the sessions of the last HISTORY_CATCHUP_SESSIONS that
+    history.db doesn't have yet (days off, missed runs). Saved days are
+    kept; nothing older is touched."""
+    have = set(HistoryDB().confluence_dates())
+    missing = [d for d in _sessions(config.HISTORY_CATCHUP_SESSIONS)
+               if d not in have]
+    if not missing:
+        print(f'history.db: last {config.HISTORY_CATCHUP_SESSIONS} sessions '
+              'complete')
+        return
+    print(f'history.db: catching up {len(missing)} missing sessions: '
+          f'{", ".join(missing)}')
+    run_as_of(missing, argv)
+
+
+def backfill_days(n: int, argv=None) -> None:
+    """Recompute the last `n` sessions, each as of its own date, into
+    history.db (screen hits + Confluence). Existing days are replaced, so
+    every session is counted by the same, current screeners."""
+    run_as_of(_sessions(n), argv)
 
 
 def main(argv=None):
@@ -141,6 +235,12 @@ def main(argv=None):
     if args.backfill_hits:
         backfill_hits()
         return
+    if args.backfill_days:
+        backfill_days(args.backfill_days, argv)
+        return
+    if args.catch_up:
+        catch_up(argv)
+        return
     if args.backfill_movers or args.movers_only:
         movers_step(None, args.backfill_movers or config.MOVERS_STORE_SESSIONS)
         return
@@ -151,11 +251,13 @@ def main(argv=None):
         tickers = tickers[:args.limit]
     print(f'universe: {len(tickers)} tickers')
 
-    data = data_loader.load_price_matrices(tickers)
+    data = _load_prices(tickers)
+    if args.as_of:
+        data = _as_of(data, args.as_of)
     close = data['close']
     latest = close.index.max()
     print(f'evaluating at latest bar: {latest:%Y-%m-%d}')
-    holes = data_loader.check_missing_days(data)
+    holes = [] if args.as_of else data_loader.check_missing_days(data)
     if holes:
         print('\n' + '!' * 72)
         print('WARNING: daily bars missing in the last 60 sessions — every '
@@ -168,8 +270,9 @@ def main(argv=None):
               're-run.')
         print('!' * 72 + '\n')
 
-    print('top movers per index -> history.db...')
-    movers_step(close, config.MOVERS_STORE_SESSIONS)
+    if not args.as_of:
+        print('top movers per index -> history.db...')
+        movers_step(close, config.MOVERS_STORE_SESSIONS)
 
     # ---------- dashboard context metrics ----------
     print('computing dashboard context (MAs, 52w, momentum, RS)...')
@@ -304,9 +407,17 @@ def main(argv=None):
         print('focus g) HVE + HV1Y volume records (baseline + ledger since cutoff)...')
         hve_df, hve_events, hve_info = volume_records.evaluate(data['volume'],
                                                                close)
-        if args.limit is None:        # a partial universe must not clobber it
-            volume_records.write_ledger(hve_events, hve_info)
+        if args.limit is None and not args.as_of:   # partial / past runs
+            volume_records.write_ledger(hve_events, hve_info)  # must not clobber it
         hv1y_df = volume_records.evaluate_hv1y(data['volume'])
+        # price behaviour around / since the record day + earnings-driven
+        # flag (Volume Records tab: Direction, post-earnings base)
+        _fin = data_loader.load_financial_data()
+        _er = _fin[[c for c in _fin.columns if re.fullmatch(r'qh\d+_date', c)]]
+        for _df, _p in ((hve_df, 'hve'), (hv1y_df, 'hv1y')):
+            _m = volume_records.record_metrics(
+                close, data['high'], data['low'], _df[f'{_p}_date'], _p, _er)
+            _df[_m.columns] = _m
         print(f'  -> HV1Y on the latest bar: '
               f'{int((hv1y_df["hv1y_bars_since"] == 0).sum())}')
         print(f'  -> cutoff {hve_info["baseline_cutoff"]}, '
@@ -357,13 +468,18 @@ def main(argv=None):
         results.update({'focus': focus_df,
                         'stage_distribution': stg_df['stage'].value_counts().sort_index()})
 
+        if args.limit is None:        # a partial universe must not clobber it
+            n, n_cf = write_hits(full, f'{latest:%Y-%m-%d}')
+            print(f'history.db ({latest:%Y-%m-%d}): {n} screen hits, '
+                  f'{n_cf} confluence rows')
+        if args.as_of:                # past session: history.db only
+            return
         out = report.run_dir()
         full.to_csv(out / 'screener_results.csv')
-        if args.limit is None:        # a partial universe must not clobber it
-            n = write_hits(full, f'{latest:%Y-%m-%d}')
-            print(f'screen hits -> history.db: {n} rows ({latest:%Y-%m-%d})')
         focus_df.to_csv(out / 'focus_list.csv')
 
+    if args.as_of:
+        return
     if not args.focus_only:
         out = report.run_dir()
         lists['minervini'].to_csv(out / 'leaders_minervini.csv')
@@ -379,6 +495,10 @@ def main(argv=None):
     text = report.write_dashboard(out / 'dashboard.md', uni_meta, results)
     print('\n' + text)
     print(f'outputs -> {out}')
+
+    # days off / missed runs: fill the gaps of the last N sessions
+    if (args.limit is None and not args.leaders_only and not args.focus_only):
+        catch_up(argv)
 
     if args.ticker:
         t = args.ticker.upper()

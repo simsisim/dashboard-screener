@@ -76,7 +76,7 @@ ButtonGroup.value = property(_bg_value_as_list)
 
 def _app(tab: str, timeout: int) -> AppTest:
     """AppTest opened on one dashboard section — only the active section's
-    widgets are built per run (tab bar = the `active_tab` radio)."""
+    widgets are built per run (`active_tab` drives the nav rows)."""
     at = AppTest.from_file(str(ROOT / 'dashboard.py'), default_timeout=timeout)
     at.session_state['active_tab'] = tab
     return at
@@ -245,8 +245,8 @@ def main():
     check('tabs: first combine pick keeps All Results',
           ss(at9.session_state, 'active_tab') == 'all'
           and len(at9.exception) == 0)
-    at9.radio(key='active_tab').set_value('leaders').run()
-    at9.radio(key='active_tab').set_value('all').run()
+    at9.radio(key='tab_row2').set_value('presets').run()   # -> Leaders' Lists
+    at9.radio(key='tab_row2').set_value('all').run()
     check('tabs: All Results state survives a section switch',
           ss(at9.session_state, 'sel_sector') == ['Technology services']
           and ss(at9.session_state, 'comb_inc_Leaders') == [

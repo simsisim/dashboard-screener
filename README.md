@@ -84,7 +84,11 @@ python3 run_screeners.py --ticker AAPL      # single-ticker metric dump
 python3 run_screeners.py --limit 200        # debug on first N tickers
 python3 run_screeners.py --movers-only      # top movers only (~10 s)
 python3 run_screeners.py --backfill-movers  # movers for the last 250 sessions
-python3 run_screeners.py --backfill-hits    # screen hits from old results/ runs
+python3 run_screeners.py --backfill-hits    # screen hits + Confluence from old results/ runs
+python3 run_screeners.py --catch-up         # fill only the missing days of the last 20
+python3 run_screeners.py --backfill-days 60 # recompute the last 60 sessions, each as of
+                                            # its own date -> history.db only (~1.5 min/day)
+python3 run_screeners.py --as-of 2026-10-08 # one past session -> history.db only
 ```
 
 All thresholds live in `config.py` (single source of truth, provenance cited
@@ -149,14 +153,23 @@ from 2026-10-10. Same ranked lists, computed from the downloadData_v1 daily bars
 - **Movers** — S&P 500 / NASDAQ 100, any stored session: top and bottom N by % change
   vs the previous close. Members: `downloadData_v1/data/tickers/sp500_tickers.csv`,
   `nasdaq100_tickers.csv`. Dow 30: later.
-- **Repeat hits** — over the last N sessions, who made the top/bottom N of an index,
-  or passed any screener (every `in_*` flag): hits, hit %, current streak, avg % change,
-  first/last hit. CSV, TradingView `.txt` and save-as-list.
+- **Repeat hits** — over the last N sessions, who made the top/bottom N of an index:
+  hits, hit %, current streak, avg % change, first/last hit. CSV, TradingView `.txt`
+  and save-as-list.
 - **Ticker history** — one ticker's daily rank in each index + the screeners it passed.
 
 Results only, in `results/history.db` (`mover_ranks`, `screen_hits`,
-`index_membership`). Every full run re-writes the last 5 sessions of movers and the
-latest session's screen hits. Backfilled movers use today's member lists
+`confluence_daily`, `index_membership`). Every full run re-writes the last 5 sessions
+of movers and the latest session's screen hits + Confluence counts.
+
+**Confluence → Last N days** reads `confluence_daily`: per ticker, on how many of the
+last N runs it met Min families / Must include family, sorted by that count, then
+streak. Batch badges only (no Patterns/Timing), so all days count the same way.
+Missed days fill themselves: every full run ends with a **catch-up** that computes the
+sessions of the last 20 (`config.HISTORY_CATCHUP_SESSIONS`) missing from `history.db`,
+each from the bars up to that date (~40 s/day; no `results/` files, no HVE ledger).
+Saved days are kept, nothing older is touched. CANSLIM/CANTATA use today's fundamentals
+snapshot for every past day. Backfilled movers use today's member lists
 (survivorship bias). Tests: `python3 test_top_movers.py`.
 
 ## Workflows tab

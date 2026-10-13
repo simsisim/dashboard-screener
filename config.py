@@ -21,7 +21,7 @@ DAILY_ARCHIVE = MARKET_DATA_DAILY / 'archive'      # 2020-01-02 -> 2025-12-31
 DAILY_CURRENT = MARKET_DATA_DAILY / 'current'      # 2026-01-02 -> today
 MARKET_DATA_BATCH_DAILY = DOWNLOAD_ROOT / 'data' / 'market_data_batch' / 'daily'
 MARKET_DATA_SHARES = DOWNLOAD_ROOT / 'data' / 'market_data' / 'shares_outstanding'
-FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_0_8.csv'
+FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_0_5.csv'  # refreshed daily (CLI_run.md)
 
 RESULTS_DIR = SCREENERS_ROOT / 'results'
 
@@ -37,6 +37,7 @@ MOVERS_STORE_SESSIONS = 5            # a normal run re-writes the last N session
 MOVERS_BACKFILL_SESSIONS = 250       # --backfill-movers default (~1 year)
 MOVERS_TOP_N = 10                    # dashboard default: top/bottom 10
 REPEAT_DAYS = 20                     # dashboard default window (sessions)
+HISTORY_CATCHUP_SESSIONS = 20        # each run fills missing days this far back
 
 # --- history requirements (trading days) ---
 # SCTR needs 210 (test_scooter.sctr_model.MIN_DAILY_BARS); Minervini/stage need

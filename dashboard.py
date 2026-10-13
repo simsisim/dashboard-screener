@@ -31,9 +31,9 @@ from src.timing import atr1_cloud, drwish_dots, pvb  # noqa: E402
 from src.patterns import cup_handle, cup_handle_chart, glb  # noqa: E402
 from src.focus import volume_records  # noqa: E402
 from src import leader_map  # noqa: E402
-from src.history_db import HistoryDB  # noqa: E402
+from src.history_db import HistoryDB, repeat_table  # noqa: E402
 
-st.set_page_config(page_title='Step-2 Filters — Leaders & Focus',
+st.set_page_config(page_title='Dashboard Screener',
                    layout='wide')
 
 # ---------------------------------------------------------------- data ----
@@ -76,7 +76,6 @@ def rerun_screeners():
 
 run = latest_run_dir()
 if run is None:
-    st.title('Step-2 Filters — Leaders & Focus')
     st.warning('No results yet. Click the button to run the screeners.')
     st.button('Run screeners now', on_click=rerun_screeners, type='primary')
     st.stop()
@@ -128,13 +127,11 @@ def parse_ticker_file(f) -> list:
     return sorted(syms)
 
 # --------------------------------------------------------------- header ---
-st.title('Step-2 Filters — Leaders & Focus')
 c1, c2 = st.columns([3, 2])
 c1.markdown(f"**Run date:** `{run.name}`  |  **Tickers:** {len(full):,}  |  "
             f"screening only, not backtesting")
 if c2.button('Re-run screeners', on_click=rerun_screeners):
     pass
-st.caption(f"Module root: `{ROOT}` — see IMPLEMENTATION_PLAN.md and README.md there.")
 
 # Tab bar = a horizontal radio, not st.tabs: st.tabs keeps the selected tab
 # only in the browser, so a rerun that reshapes the page (e.g. the first
@@ -162,8 +159,9 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'lists_uploader',
                'ts_run', 'pt_run',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
-               'cf_save_sel', 'cf_save_top', 'ts_save_list', 'pt_save_list',
-               'vr_save_list', 'mv_save_list', 'lm_run', 'lm_upload',
+               'cf_save_sel', 'cf_save_top', 'cfh_save_list', 'ts_save_list', 'pt_save_list',
+               'vr_save_list', 'vr_reset', 'vrd_peb', 'vrd_reset_btn',
+               'mv_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
                'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
@@ -173,9 +171,62 @@ for _k in list(st.session_state.keys()):
     if _k not in _NO_PERSIST and not _k.startswith(_NO_PERSIST_PREFIX):
         st.session_state[_k] = st.session_state[_k]
 
-ACTIVE_TAB = st.radio('Section', list(TABS), format_func=TABS.get,
-                      horizontal=True, key='active_tab',
-                      label_visibility='collapsed')
+# Navigation rows: a group, then its tabs; under Screen, "📌 Presets" (last)
+# opens a third row (Leaders' Lists, Focus List). `active_tab` (plain session state)
+# stays the single source of truth — tests and the reruns above key on it;
+# the rows follow it, and each group / sub-row reopens its last-used tab.
+TAB_GROUPS = {
+    '🔎 Screen': ['all', 'confluence', 'workflows', 'presets'],
+    '📡 Signals': ['timing', 'patterns', 'volume'],
+    '🌍 Market': ['movers'],
+    '📋 Ticker': ['detail', 'leadermap'],
+}
+TAB_SUBROWS = {'presets': ['leaders', 'focus']}
+NAV_LABELS = {**TABS, 'presets': '📌 Presets'}
+_NAV_PATH = {}                      # tab -> (group, row-2 item)
+for _g, _items in TAB_GROUPS.items():
+    for _it in _items:
+        for _t in TAB_SUBROWS.get(_it, [_it]):
+            _NAV_PATH[_t] = (_g, _it)
+assert set(_NAV_PATH) == set(TABS), 'every tab needs a place in the rows'
+
+
+def _first_tab(item: str) -> str:
+    """Last-used (else first) tab behind a group or a row-2 item."""
+    if item in TAB_GROUPS:
+        return st.session_state.get(f'_last_tab_{item}') or \
+            _first_tab(TAB_GROUPS[item][0])
+    if item in TAB_SUBROWS:
+        return st.session_state.get(f'_last_tab_{item}', TAB_SUBROWS[item][0])
+    return item
+
+
+def _on_nav(key: str):
+    st.session_state['active_tab'] = _first_tab(st.session_state[key])
+
+
+if st.session_state.get('active_tab') not in _NAV_PATH:
+    st.session_state['active_tab'] = 'leaders'     # landing tab, as before
+ACTIVE_TAB = st.session_state['active_tab']
+_group, _row2 = _NAV_PATH[ACTIVE_TAB]
+st.session_state['tab_group'] = _group
+st.session_state['tab_row2'] = _row2
+# group row reads as the main navigation: larger, semi-bold labels
+st.markdown('<style>.st-key-tab_group [data-testid="stMarkdownContainer"] p '
+            '{font-size: 1.3rem; font-weight: 600;}</style>',
+            unsafe_allow_html=True)
+st.radio('Group', list(TAB_GROUPS), horizontal=True, key='tab_group',
+         on_change=_on_nav, args=('tab_group',), label_visibility='collapsed')
+st.radio('Section', TAB_GROUPS[_group], format_func=NAV_LABELS.get,
+         horizontal=True, key='tab_row2', on_change=_on_nav,
+         args=('tab_row2',), label_visibility='collapsed')
+if _row2 in TAB_SUBROWS:
+    st.session_state['tab_row3'] = ACTIVE_TAB
+    st.radio('Preset', TAB_SUBROWS[_row2], format_func=TABS.get,
+             horizontal=True, key='tab_row3', on_change=_on_nav,
+             args=('tab_row3',), label_visibility='collapsed')
+    st.session_state[f'_last_tab_{_row2}'] = ACTIVE_TAB
+st.session_state[f'_last_tab_{_group}'] = ACTIVE_TAB
 st.divider()
 
 # --------------------------------------------- Screener (sketch layout) --
@@ -268,15 +319,17 @@ _TV_HELP = ('EXCHANGE:SYMBOL, comma-separated — paste-ready for TradingView '
             '“Upload list…”. Split by hand if over 1000 names.')
 
 
-def _init_filter_state():
+def _init_filter_state(p: str = ''):
     for k in dfil.SPEC_BY_KEY:
-        st.session_state.setdefault(f'sel_{k}', 'All')
+        st.session_state.setdefault(f'{p}sel_{k}', 'All')
     for k, (label, col, fam) in dfil.SPEC_BY_KEY.items():
         lo, hi, _step = dfil.CUSTOM_RANGE[fam]
-        st.session_state.setdefault(f'custlo_{k}', lo)
-        st.session_state.setdefault(f'custhi_{k}', hi)
+        st.session_state.setdefault(f'{p}custlo_{k}', lo)
+        st.session_state.setdefault(f'{p}custhi_{k}', hi)
     for k, default in dfil.ADVANCED_DEFAULTS.items():
-        st.session_state.setdefault(k, default)
+        st.session_state.setdefault(f'{p}{k}', default)
+    if p:
+        return
     for k, default in {'result_n': 30, 'sort_order': 'Descending'}.items():
         st.session_state.setdefault(k, default)
 
@@ -304,10 +357,7 @@ def _reset_filters():
     """Runs as an on_click callback — i.e. BEFORE the widgets are
     instantiated on the next run, which is the only safe time to write
     widget-backed session_state keys."""
-    for k in dfil.SPEC_BY_KEY:
-        st.session_state[f'sel_{k}'] = 'All'
-    for k, default in dfil.ADVANCED_DEFAULTS.items():
-        st.session_state[k] = default
+    _reset_panel()
     for k in [k for k in st.session_state
               if str(k).startswith(('comb_inc_', 'comb_exc_',
                                     'comb2_inc_', 'comb2_exc_'))]:
@@ -323,6 +373,170 @@ def _reset_filters():
                        'comb_levels': 'Funnel',
                        '_flash': ''}.items():
         st.session_state[k] = default
+
+
+# ---- Screener filter panel, reusable per tab via a key prefix `p` ----
+def _thresh_widget(key: str, p: str = ''):
+    label, _col, fam = dfil.SPEC_BY_KEY[key]
+    options = [lbl for lbl, _rng in dfil.THRESHOLD_FAMILIES[fam]] + ['Custom…']
+    val = st.selectbox(label, options, key=f'{p}sel_{key}')
+    if val == 'Custom…':
+        lo0, hi0, step0 = dfil.CUSTOM_RANGE[fam]
+        st.slider(f'{label} range', lo0, hi0,
+                  (st.session_state[f'{p}custlo_{key}'],
+                   st.session_state[f'{p}custhi_{key}']),
+                  step=step0, key=f'{p}custslider_{key}')
+
+
+def _filter_grid(p: str = ''):
+    """The Screener's threshold grid (rows 1-4). `p` prefixes every
+    widget key, so another tab gets the same panel with its own state."""
+    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
+    with r1c1:
+        _thresh_widget('mktcap', p)
+    with r1c2:
+        st.multiselect('Sector', sorted(full['sector'].dropna().unique()),
+                       key=f'{p}sel_sector')
+    with r1c3:
+        st.multiselect('Industry Group', sorted(full['industry'].dropna().unique()),
+                       key=f'{p}sel_industry')
+    with r1c4:
+        _thresh_widget('price', p)
+    with r1c5:
+        _thresh_widget('vs10', p)
+
+    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5)
+    for c, k in zip((r2c1, r2c2, r2c3, r2c4, r2c5),
+                    ('vs21', 'vs50', 'vs200', 'within_high', 'gain5')):
+        with c:
+            _thresh_widget(k, p)
+
+    r3c1, r3c2, r3c3, r3c4, r3c5 = st.columns(5)
+    for c, k in zip((r3c1, r3c2, r3c3, r3c4, r3c5),
+                    ('gain1m', 'gain3m', 'gain6m', 'adr', 'avgvol')):
+        with c:
+            _thresh_widget(k, p)
+
+    r4c1, r4c2, r4c3 = st.columns([1, 1, 3])
+    with r4c1:
+        _thresh_widget('adv', p)
+    with r4c2:
+        _thresh_widget('rsi14', p)
+
+
+def _advanced_filters(p: str = ''):
+    """The Screener's 'Advanced filters' expander, keys prefixed by `p`."""
+    with st.expander('Advanced filters (stage, RS, RTI, leaders lists, '
+                     'exchange, index…)'):
+        a1, a2, a3, a4 = st.columns(4)
+        a1.multiselect('Leaders lists',
+                       ['minervini', 'canslim', 'scooter', 'cantata'],
+                       key=f'{p}adv_leaders')
+        a2.radio('Combine lists', ['Any (union)', 'All (intersection)'],
+                 key=f'{p}adv_leaders_mode', disabled=not st.session_state[f'{p}adv_leaders'])
+        a3.multiselect('Stage', ['1', '2A', '2B', '2C', '3', '4'], key=f'{p}adv_stages',
+                       help='empty = all stages')
+        a4.multiselect('RTI zone', ['1', '2', '3'], key=f'{p}adv_rti_zone',
+                       help='empty = all zones')
+        a5, a6, a7, a8 = st.columns(4)
+        a5.slider('max ext (ATR, 21EMA & 40SMA)', -5.0, 10.0, key=f'{p}adv_max_ext', step=0.5,
+                  help='10.0 = off')
+        a6.slider('RS % ≥', 0.0, 100.0, key=f'{p}adv_min_rs', step=1.0)
+        a7.slider('Minervini count ≥', 0, 8, key=f'{p}adv_min_count')
+        a8.multiselect('Exchange', sorted(full['exchange'].dropna().unique()),
+                       key=f'{p}adv_exchange')
+        a9x, a9y, _a9z, _a9w = st.columns(4)
+        a9x.slider('max ext vs 21 EMA (ATR)', -5.0, 10.0, key=f'{p}adv_max_ext21',
+                   step=0.5, help='Ollie: 3. 10.0 = off')
+        a9y.slider('max ext vs 50 SMA (ATR)', -5.0, 10.0, key=f'{p}adv_max_ext50',
+                   step=0.5, help='Ollie: 5. 10.0 = off')
+        a9, a10, a11, a12 = st.columns(4)
+        a9.multiselect('Index membership', index_choices(), key=f'{p}adv_index')
+        a10.checkbox('RTI low-vol dots', key=f'{p}adv_rti_dots')
+        a11.checkbox('RTI range expansion', key=f'{p}adv_rti_exp')
+        a12.checkbox('Stockbee 9M mover', key=f'{p}adv_9m_movers')
+        a13, a14, a15, a16 = st.columns(4)
+        a13.checkbox('Stockbee 20% weekly mover', key=f'{p}adv_weekly_movers')
+        a14.checkbox('Stockbee 4% daily gainer', key=f'{p}adv_daily_gainers')
+        a15.checkbox('Golden Launch Pad', key=f'{p}adv_gold_launch_pad')
+        a16.multiselect('GMMA state',
+                        ['bullish', 'bearish', 'compression_breakout',
+                         'expanding', 'bullish_crossover', 'bearish_crossover',
+                         'transitioning'], key=f'{p}adv_gmma_state')
+        a17, a18, a19, a20 = st.columns(4)
+        a17.checkbox('Qullamaggie suite', key=f'{p}adv_qullamaggie')
+        a18.checkbox('Volume anomaly (3-sigma)', key=f'{p}adv_volume_anomaly')
+        a19.checkbox('ADL accumulation (composite >= 70)', key=f'{p}adv_adl_accumulation')
+        a20, a21, a22, a23 = st.columns(4)
+        a20.checkbox('52w high breakout', key=f'{p}adv_52w_high_breakout')
+        a21.checkbox('52w low breakdown', key=f'{p}adv_52w_low_breakdown')
+        a22.checkbox('EMA20 pullback test', key=f'{p}adv_ema20_pullback')
+        a23.checkbox('Downtrend reversal', key=f'{p}adv_downtrend_reversal')
+        a24, a25, a26, a27 = st.columns(4)
+        a24.checkbox('CANTATA CE leader', key=f'{p}adv_cantata',
+                     help=f'in_cantata: CE >= {config.CANTATA_MIN_CE} of 18')
+        a25.slider('CANTATA CE ≥', 0.0, 18.0, key=f'{p}adv_ce_min', step=0.5,
+                   help='0 = off; CET(0-7) + CEF(0-11)')
+        a26.checkbox('21dma-structure pullback', key=f'{p}adv_21dma_pullback',
+                     help=f'trend up + close within ±{config.MA21S_PULLBACK_PCT:g}% '
+                          'of the EMA21 high/low band (PrimeTrading script)')
+        a27.multiselect('21dma-structure zone',
+                        ['extended', 'above', 'inside', 'undercut', 'below'],
+                        key=f'{p}adv_ma21s_zone',
+                        help='close vs the band: above/undercut = within '
+                             f'{config.MA21S_PULLBACK_PCT:g}% of it; empty = all')
+        a28, a29, _a30, _a31 = st.columns(4)
+        a28.multiselect('21dma-structure trend', ['up', 'down'],
+                        key=f'{p}adv_ma21s_trend', help='empty = all')
+        with a29:
+            _thresh_widget('ma21s_dist', p)
+        st.markdown('**Volume & trend filters**')
+        v1, v2, v3, v4 = st.columns(4)
+        with v1:
+            _thresh_widget('vroc', p)
+        with v2:
+            _thresh_widget('adtv', p)
+        with v3:
+            _thresh_widget('mfi', p)
+        with v4:
+            _thresh_widget('adx', p)
+        v5, v6, _v7, _v8 = st.columns(4)
+        with v5:
+            _thresh_widget('hve_since', p)
+        with v6:
+            _thresh_widget('hv1y_since', p)
+
+
+def _panel_selections(p: str = '') -> dict:
+    selections = {}
+    for key in dfil.SPEC_BY_KEY:
+        val = st.session_state[f'{p}sel_{key}']
+        if val == 'Custom…':
+            lo, hi = st.session_state.get(f'{p}custslider_{key}',
+                                          (st.session_state[f'{p}custlo_{key}'],
+                                           st.session_state[f'{p}custhi_{key}']))
+            selections[key] = ('custom', lo, hi)
+        else:
+            selections[key] = val
+    return selections
+
+
+def _panel_mask(df: pd.DataFrame, p: str = '') -> pd.Series:
+    """Threshold grid + the whole Advanced panel over `df` —
+    build_advanced_mask is the single source of truth, shared with the
+    Workflows tab engine (src/workflow.py); feedback: workflows_tab.md §4"""
+    mask = dfil.build_mask(df, _panel_selections(p))
+    mask &= dfil.build_advanced_mask(
+        df, {k: st.session_state[f'{p}{k}'] for k in dfil.ADVANCED_DEFAULTS},
+        IDX_MAP)
+    return mask
+
+
+def _reset_panel(p: str = ''):
+    for k in dfil.SPEC_BY_KEY:
+        st.session_state[f'{p}sel_{k}'] = 'All'
+    for k, default in dfil.ADVANCED_DEFAULTS.items():
+        st.session_state[f'{p}{k}'] = default
 
 
 _init_filter_state()
@@ -544,48 +758,7 @@ if ACTIVE_TAB == 'all':
     # --------------------------- filter rows (sketch rows 1-4) ------------
     st.subheader('Filters')
 
-    def _thresh_widget(key: str):
-        label, _col, fam = dfil.SPEC_BY_KEY[key]
-        options = [lbl for lbl, _rng in dfil.THRESHOLD_FAMILIES[fam]] + ['Custom…']
-        val = st.selectbox(label, options, key=f'sel_{key}')
-        if val == 'Custom…':
-            lo0, hi0, step0 = dfil.CUSTOM_RANGE[fam]
-            st.slider(f'{label} range', lo0, hi0,
-                      (st.session_state[f'custlo_{key}'],
-                       st.session_state[f'custhi_{key}']),
-                      step=step0, key=f'custslider_{key}')
-
-    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
-    with r1c1:
-        _thresh_widget('mktcap')
-    with r1c2:
-        st.multiselect('Sector', sorted(full['sector'].dropna().unique()),
-                       key='sel_sector')
-    with r1c3:
-        st.multiselect('Industry Group', sorted(full['industry'].dropna().unique()),
-                       key='sel_industry')
-    with r1c4:
-        _thresh_widget('price')
-    with r1c5:
-        _thresh_widget('vs10')
-
-    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5)
-    for c, k in zip((r2c1, r2c2, r2c3, r2c4, r2c5),
-                    ('vs21', 'vs50', 'vs200', 'within_high', 'gain5')):
-        with c:
-            _thresh_widget(k)
-
-    r3c1, r3c2, r3c3, r3c4, r3c5 = st.columns(5)
-    for c, k in zip((r3c1, r3c2, r3c3, r3c4, r3c5),
-                    ('gain1m', 'gain3m', 'gain6m', 'adr', 'avgvol')):
-        with c:
-            _thresh_widget(k)
-
-    r4c1, r4c2, r4c3 = st.columns([1, 1, 3])
-    with r4c1:
-        _thresh_widget('adv')
-    with r4c2:
-        _thresh_widget('rsi14')
+    _filter_grid()
 
     # ----------------------------- buttons (sketch) ------------------------
     def _current_panel():
@@ -624,104 +797,10 @@ if ACTIVE_TAB == 'all':
             st.rerun()
 
     # --------------------- advanced filters (collapsible) ------------------
-    with st.expander('Advanced filters (stage, RS, RTI, leaders lists, '
-                     'exchange, index…)'):
-        a1, a2, a3, a4 = st.columns(4)
-        a1.multiselect('Leaders lists',
-                       ['minervini', 'canslim', 'scooter', 'cantata'],
-                       key='adv_leaders')
-        a2.radio('Combine lists', ['Any (union)', 'All (intersection)'],
-                 key='adv_leaders_mode', disabled=not st.session_state['adv_leaders'])
-        a3.multiselect('Stage', ['1', '2A', '2B', '2C', '3', '4'], key='adv_stages',
-                       help='empty = all stages')
-        a4.multiselect('RTI zone', ['1', '2', '3'], key='adv_rti_zone',
-                       help='empty = all zones')
-        a5, a6, a7, a8 = st.columns(4)
-        a5.slider('max ext (ATR, 21EMA & 40SMA)', -5.0, 10.0, key='adv_max_ext', step=0.5,
-                  help='10.0 = off')
-        a6.slider('RS % ≥', 0.0, 100.0, key='adv_min_rs', step=1.0)
-        a7.slider('Minervini count ≥', 0, 8, key='adv_min_count')
-        a8.multiselect('Exchange', sorted(full['exchange'].dropna().unique()),
-                       key='adv_exchange')
-        a9x, a9y, _a9z, _a9w = st.columns(4)
-        a9x.slider('max ext vs 21 EMA (ATR)', -5.0, 10.0, key='adv_max_ext21',
-                   step=0.5, help='Ollie: 3. 10.0 = off')
-        a9y.slider('max ext vs 50 SMA (ATR)', -5.0, 10.0, key='adv_max_ext50',
-                   step=0.5, help='Ollie: 5. 10.0 = off')
-        a9, a10, a11, a12 = st.columns(4)
-        a9.multiselect('Index membership', index_choices(), key='adv_index')
-        a10.checkbox('RTI low-vol dots', key='adv_rti_dots')
-        a11.checkbox('RTI range expansion', key='adv_rti_exp')
-        a12.checkbox('Stockbee 9M mover', key='adv_9m_movers')
-        a13, a14, a15, a16 = st.columns(4)
-        a13.checkbox('Stockbee 20% weekly mover', key='adv_weekly_movers')
-        a14.checkbox('Stockbee 4% daily gainer', key='adv_daily_gainers')
-        a15.checkbox('Golden Launch Pad', key='adv_gold_launch_pad')
-        a16.multiselect('GMMA state',
-                        ['bullish', 'bearish', 'compression_breakout',
-                         'expanding', 'bullish_crossover', 'bearish_crossover',
-                         'transitioning'], key='adv_gmma_state')
-        a17, a18, a19, a20 = st.columns(4)
-        a17.checkbox('Qullamaggie suite', key='adv_qullamaggie')
-        a18.checkbox('Volume anomaly (3-sigma)', key='adv_volume_anomaly')
-        a19.checkbox('ADL accumulation (composite >= 70)', key='adv_adl_accumulation')
-        a20, a21, a22, a23 = st.columns(4)
-        a20.checkbox('52w high breakout', key='adv_52w_high_breakout')
-        a21.checkbox('52w low breakdown', key='adv_52w_low_breakdown')
-        a22.checkbox('EMA20 pullback test', key='adv_ema20_pullback')
-        a23.checkbox('Downtrend reversal', key='adv_downtrend_reversal')
-        a24, a25, a26, a27 = st.columns(4)
-        a24.checkbox('CANTATA CE leader', key='adv_cantata',
-                     help=f'in_cantata: CE >= {config.CANTATA_MIN_CE} of 18')
-        a25.slider('CANTATA CE ≥', 0.0, 18.0, key='adv_ce_min', step=0.5,
-                   help='0 = off; CET(0-7) + CEF(0-11)')
-        a26.checkbox('21dma-structure pullback', key='adv_21dma_pullback',
-                     help=f'trend up + close within ±{config.MA21S_PULLBACK_PCT:g}% '
-                          'of the EMA21 high/low band (PrimeTrading script)')
-        a27.multiselect('21dma-structure zone',
-                        ['extended', 'above', 'inside', 'undercut', 'below'],
-                        key='adv_ma21s_zone',
-                        help='close vs the band: above/undercut = within '
-                             f'{config.MA21S_PULLBACK_PCT:g}% of it; empty = all')
-        a28, a29, _a30, _a31 = st.columns(4)
-        a28.multiselect('21dma-structure trend', ['up', 'down'],
-                        key='adv_ma21s_trend', help='empty = all')
-        with a29:
-            _thresh_widget('ma21s_dist')
-        st.markdown('**Volume & trend filters**')
-        v1, v2, v3, v4 = st.columns(4)
-        with v1:
-            _thresh_widget('vroc')
-        with v2:
-            _thresh_widget('adtv')
-        with v3:
-            _thresh_widget('mfi')
-        with v4:
-            _thresh_widget('adx')
-        v5, v6, _v7, _v8 = st.columns(4)
-        with v5:
-            _thresh_widget('hve_since')
-        with v6:
-            _thresh_widget('hv1y_since')
+    _advanced_filters()
 
     # ------------------------------- mask ----------------------------------
-    selections = {}
-    for key in dfil.SPEC_BY_KEY:
-        val = st.session_state[f'sel_{key}']
-        if val == 'Custom…':
-            lo, hi = st.session_state.get(f'custslider_{key}',
-                                          (st.session_state[f'custlo_{key}'],
-                                           st.session_state[f'custhi_{key}']))
-            selections[key] = ('custom', lo, hi)
-        else:
-            selections[key] = val
-
-    # threshold grid + the whole Advanced panel (sector/industry included) —
-    # build_advanced_mask is the single source of truth, shared with the
-    # Workflows tab engine (src/workflow.py); feedback: workflows_tab.md §4
-    mask = dfil.build_mask(full, selections)
-    mask &= dfil.build_advanced_mask(
-        full, {k: st.session_state[k] for k in dfil.ADVANCED_DEFAULTS}, IDX_MAP)
+    mask = _panel_mask(full)
     if active_list:
         _variants = {t.replace('.', '-') for t in active_list}
         mask &= pd.Series(full.index.isin(active_list) | full.index.isin(_variants),
@@ -891,6 +970,38 @@ if ACTIVE_TAB == 'all':
 # run_screeners.py recomputes every run. HV1Y: rolling 1-year high, computed
 # every run (src/focus/volume_records.py).
 VR_SCREENS = ['HVE', 'HV1Y']
+VR_DIRECTIONS = ['Up & held', 'Up & faded', 'Down & bounced',
+                 'Down & continued', 'Pending']
+_VRD_DEFAULTS = {'vrd_dir': [], 'vrd_er': False, 'vrd_min1st': 0.0,
+                 'vrd_gap': False, 'vrd_since': 0.0, 'vrd_range': 0.0,
+                 'vrd_days': (0, 250)}
+
+
+def _vr_direction(d1: pd.Series, d2: pd.Series) -> pd.Series:
+    """Record day (1st dch) up/down x next day (2nd dch) held/reversed.
+    'Pending' = the record is the latest bar (no next day yet)."""
+    up = d1 > 0
+    out = np.where(d2.isna(), 'Pending',
+                   np.where(up, np.where(d2 >= 0, 'Up & held', 'Up & faded'),
+                            np.where(d2 > 0, 'Down & bounced',
+                                     'Down & continued')))
+    return pd.Series(np.where(d1.isna(), None, out), index=d1.index)
+
+
+def _vrd_reset():
+    for k, v in _VRD_DEFAULTS.items():
+        st.session_state[k] = v
+
+
+def _vrd_post_earnings_base():
+    """Preset: gapped up on earnings, kept the gap, now moving sideways
+    5-15 sessions later (user's pattern: gap up, then 7-13 days sideways)."""
+    _vrd_reset()
+    st.session_state.update({
+        'vr_inc': ['HV1Y'], 'vr_exc': [], 'vr_n_bars': 16,
+        'vrd_dir': ['Up & held', 'Up & faded'], 'vrd_er': True,
+        'vrd_min1st': 5.0, 'vrd_gap': True, 'vrd_since': 5.0,
+        'vrd_days': (5, 15)})
 
 if ACTIVE_TAB == 'volume':
     _how_built('ℹ️ How Volume Records are built', [
@@ -909,6 +1020,26 @@ if ACTIVE_TAB == 'volume':
         '<b>vs prior</b> = how far (%) the day beat the record before it '
         '(HVE) or the highest of the year before it (HV1Y). <b>HVE records</b> '
         '= how many all-time records the ticker set inside the window',
+        '<b>1st dch %</b> = close on the record day vs the close the day '
+        'before. <b>2nd dch %</b> = close the day after vs the record day '
+        '(empty when the record is the latest bar). Volume says how much '
+        'traded, these say which way the price went',
+        '<b>Direction</b> (step 3) judges each row on its HVE when it matched '
+        'HVE, else its HV1Y. Up/Down = 1st dch; held/faded, bounced/'
+        'continued = 2nd dch; Pending = record on the latest bar. '
+        '<b>since record %</b> = today vs the record-day close. <b>range '
+        'since %</b> = (highest high − lowest low since the record day) / '
+        'record close — small means a tight sideways base. <b>gap held</b> = '
+        'every low after the record day stayed above the close before it. '
+        '<b>earnings</b> = the record day is a report date or the session '
+        'after (reports after the close move the price next day), from '
+        'qh*_date in financial_data_0_5.csv — empty when the ticker has no '
+        'earnings history',
+        '<b>▶ Post-earnings base</b>: HV1Y within 16 bars, earnings-driven, '
+        'record day ≥ +5%, gap held, 5–15 sessions ago, today within ±5% of '
+        'the record close. Every value stays editable afterwards',
+        '<b>Filters</b> (step 4) = the Screener tab’s panel (same grid and '
+        'Advanced filters, own settings here)',
     ])
     _st = volume_records.read_status()
     if not _st or not _st.get('bar_dates') or 'hv1y_bars_since' not in full:
@@ -916,7 +1047,8 @@ if ACTIVE_TAB == 'volume':
         st.stop()
 
     for _k, _v in {'vr_inc': ['HVE'], 'vr_exc': [], 'vr_pick_as': 'Include',
-                   'vr_mode': 'All (AND)', 'vr_excl_funds': True}.items():
+                   'vr_mode': 'All (AND)', 'vr_excl_funds': True,
+                   **_VRD_DEFAULTS}.items():
         st.session_state.setdefault(_k, _v)
 
     # ---- 1 Pick screens
@@ -973,7 +1105,7 @@ if ACTIVE_TAB == 'volume':
                     f'NOT `{x}` ({int(vr_masks[x].sum())})' for x in vr_exc)
             cc1.markdown(_expr)
             cc1.markdown(f'→ **{int(vr_mask.sum())}** tickers '
-                         '(before the Filters below)')
+                         '(before Direction and Filters below)')
             if len(vr_inc) == 2:
                 cc1.caption('Every HVE is also an HV1Y (an all-time record '
                             'also beats the past year), so AND gives the HVE '
@@ -981,31 +1113,62 @@ if ACTIVE_TAB == 'volume':
                             'highs that are NOT all-time records: Include '
                             'HV1Y + Exclude HVE.')
 
-    # ---- 3 Filters
-    st.markdown('**3&nbsp;&nbsp;Filters**')
+    # ---- 3 Direction — price behaviour around / since the record day
+    st.markdown('**3&nbsp;&nbsp;Direction**')
     with st.container(border=True):
-        f1, f2, f3, f4 = st.columns(4)
-        _opts = {fam: dict(dfil.THRESHOLD_FAMILIES[fam])
-                 for fam in ('mktcap', 'price', 'adv_dollar')}
-        vr_cap = f1.selectbox('Market cap', list(_opts['mktcap']),
-                              key='vr_mktcap')
-        vr_price = f2.selectbox('Last closing price', list(_opts['price']),
-                                key='vr_price')
-        vr_adv = f3.selectbox('50d Av. Dollar Volume (ADV)',
-                              list(_opts['adv_dollar']), key='vr_adv')
-        vr_min_vs = f4.number_input('vs prior ≥ (%)', 0.0, 1000.0, 0.0, 5.0,
+        d1c, d2c = st.columns([3, 1])
+        d1c.pills('Record day → next day (empty = all)', VR_DIRECTIONS,
+                  selection_mode='multi', key='vrd_dir',
+                  help='Up/Down = record-day close vs the day before (1st '
+                       'dch). Held/faded, bounced/continued = the next '
+                       'day (2nd dch). Pending = the record is the latest bar')
+        d2c.button('▶ Post-earnings base', key='vrd_peb',
+                   on_click=_vrd_post_earnings_base,
+                   help='HV1Y on an earnings day, up ≥ 5%, gap held, now '
+                        '5–15 sessions later within ±5% of the record close')
+        d2c.button('Reset Direction', key='vrd_reset_btn', on_click=_vrd_reset)
+        e1, e2, e3, e4, e5 = st.columns(5)
+        e1.checkbox('Earnings-driven only', key='vrd_er',
+                    help='record day = an earnings date or the session after '
+                         '(qh*_date in financial_data_0_5.csv)')
+        e2.number_input('Record-day change ≥ (%)', -100.0, 100.0, step=1.0,
+                        key='vrd_min1st', help='1st dch %; 0 = off')
+        e3.checkbox('Gap held', key='vrd_gap',
+                    help='every low after the record day stayed above the '
+                         'close before it')
+        e4.number_input('Since record within ± (%)', 0.0, 100.0, step=1.0,
+                        key='vrd_since', help='today vs the record-day close; '
+                                              '0 = off')
+        e5.number_input('Range since ≤ (%)', 0.0, 500.0, step=1.0,
+                        key='vrd_range', help='(highest high − lowest low '
+                        'since the record day) / record close; 0 = off')
+        _dmax = max(int(vr_n) - 1, 1)
+        _dlo, _dhi = st.session_state['vrd_days']
+        if _dhi >= st.session_state.get('_vrd_days_max', _dmax):
+            _dhi = _dmax              # "up to the window" follows N
+        st.session_state['_vrd_days_max'] = _dmax
+        st.session_state['vrd_days'] = (min(_dlo, _dmax), min(_dhi, _dmax))
+        st.slider('Days since the record day', 0, _dmax, key='vrd_days',
+                  help='0 = the latest bar; bounded by "within the last N bars"')
+
+    # ---- 4 Filters — the Screener's panel, own state (keys 'vrf_…')
+    _init_filter_state('vrf_')
+    st.markdown('**4&nbsp;&nbsp;Filters**')
+    with st.container(border=True):
+        f1, f2, f3 = st.columns([1, 1, 1])
+        vr_min_vs = f1.number_input('vs prior ≥ (%)', 0.0, 1000.0, 0.0, 5.0,
                                     key='vr_min_vs_prior',
                                     help='best of the matched screens; 0 = off')
-        f5, f6, f7 = st.columns([1.5, 1.5, 1])
-        vr_idx = f5.multiselect('Index membership (empty = whole universe)',
-                                index_choices(), key='vr_index')
-        vr_sec = f6.multiselect('Sector', sorted(full['sector'].dropna().unique()),
-                                key='vr_sector')
-        vr_nofunds = f7.checkbox('Exclude funds (Investment trusts)',
+        vr_nofunds = f2.checkbox('Exclude funds (Investment trusts)',
                                  key='vr_excl_funds',
                                  help='closed-end / muni funds: their volume '
                                       'spikes are fund events, not accumulation')
+        f3.button('Reset Filters', key='vr_reset', on_click=_reset_panel,
+                  args=('vrf_',), help='restores every filter to All / defaults')
+        _filter_grid('vrf_')
+        _advanced_filters('vrf_')
 
+    vr_mask &= _panel_mask(full, 'vrf_')
     base = full[vr_mask]
     if len(base):
         # per-ticker table: HVE facts within the window + HV1Y facts
@@ -1024,8 +1187,21 @@ if ACTIVE_TAB == 'volume':
             tbl['hve_vs_prior_pct'] = ((_lt['volume'].astype(float)
                                         / _lt['prior_max'].astype(float) - 1)
                                        * 100).round(1).reindex(base.index)
-        for c in ('hv1y_date', 'hv1y_bars_since', 'hv1y_vs_prior_pct'):
-            tbl[c] = base[c]
+        _met = ('1st_dch_pct', '2nd_dch_pct', 'since_record_pct',
+                'range_since_pct', 'gap_held', 'earnings')
+        for c in ([f'hve_{m}' for m in _met]
+                  + ['hv1y_date', 'hv1y_bars_since', 'hv1y_vs_prior_pct']
+                  + [f'hv1y_{m}' for m in _met]):
+            tbl[c] = base[c] if c in base else np.nan
+        # the record a row is judged on: its HVE when it matched HVE,
+        # else its HV1Y — drives Direction and the step-3 filters
+        _use_hve = (_hits['HVE'] if 'HVE' in _hits
+                    else pd.Series(False, index=tbl.index))
+        _recv = {m: tbl[f'hve_{m}'].where(_use_hve, tbl[f'hv1y_{m}'])
+                 for m in _met + ('bars_since',)}
+        tbl.insert(0, 'direction', _vr_direction(_recv['1st_dch_pct'],
+                                                 _recv['2nd_dch_pct']))
+        tbl.insert(1, 'earnings', _recv['earnings'])
         ctx_cols = ['close', 'gain_5d', 'gain_1m', 'rel_volume_today', 'stage',
                     'rs_pct', 'ext_21ema_atr', 'adr20_pct', 'adv50_dollar',
                     'market_cap', 'sector', 'industry', 'exchange']
@@ -1033,26 +1209,29 @@ if ACTIVE_TAB == 'volume':
 
         # filters
         keep = pd.Series(True, index=tbl.index)
-        for col, sel, fam in (('market_cap', vr_cap, 'mktcap'),
-                              ('close', vr_price, 'price'),
-                              ('adv50_dollar', vr_adv, 'adv_dollar')):
-            rng = _opts[fam][sel]
-            if rng is not None:
-                keep &= tbl[col].notna() & (tbl[col] >= rng[0])
         _vs = pd.concat([tbl['hve_vs_prior_pct'].where(_hits['HVE'])
                          if 'HVE' in _hits else None,
                          tbl['hv1y_vs_prior_pct'].where(_hits['HV1Y'])
                          if 'HV1Y' in _hits else None], axis=1).max(axis=1)
         if vr_min_vs > 0:
             keep &= _vs >= vr_min_vs
-        if vr_idx:
-            _sel = set(vr_idx)
-            keep &= np.array([bool(IDX_MAP.get(str(t).upper(), frozenset())
-                                   & _sel) for t in tbl.index])
-        if vr_sec:
-            keep &= tbl['sector'].isin(vr_sec)
         if vr_nofunds:
             keep &= tbl['industry'] != 'Investment trusts'
+        ss = st.session_state
+        if ss['vrd_dir']:
+            keep &= tbl['direction'].isin(ss['vrd_dir'])
+        if ss['vrd_er']:
+            keep &= tbl['earnings'].astype('boolean').fillna(False)
+        if ss['vrd_min1st']:
+            keep &= _recv['1st_dch_pct'] >= ss['vrd_min1st']
+        if ss['vrd_gap']:
+            keep &= _recv['gap_held'].astype('boolean').fillna(False)
+        if ss['vrd_since']:
+            keep &= _recv['since_record_pct'].abs() <= ss['vrd_since']
+        if ss['vrd_range']:
+            keep &= _recv['range_since_pct'] <= ss['vrd_range']
+        _bs = pd.to_numeric(_recv['bars_since'], errors='coerce')
+        keep &= _bs.between(*ss['vrd_days'])
         _recent = pd.concat([tbl['hve_bars_since'].where(_hits['HVE'])
                              if 'HVE' in _hits else None,
                              tbl['hv1y_bars_since'].where(_hits['HV1Y'])
@@ -1060,6 +1239,13 @@ if ACTIVE_TAB == 'volume':
         tbl = (tbl.assign(_recent=_recent, _vs=_vs)[keep]
                .sort_values(['_recent', '_vs'], ascending=[True, False])
                .drop(columns=['_recent', '_vs']))
+        # only the included screens' columns (hve_* / hv1y_*); matched_by
+        # says nothing when a single screen is included
+        _hide = [c for x in VR_SCREENS if x not in vr_inc
+                 for c in tbl.columns if c.startswith(f'{x.lower()}_')]
+        if len(vr_inc) < 2:
+            _hide.append('matched_by')
+        tbl = tbl.drop(columns=_hide)
     else:
         tbl = pd.DataFrame()
 
@@ -1072,10 +1258,17 @@ if ACTIVE_TAB == 'volume':
         if len(show) <= 200:
             show.insert(1, 'spark',
                         [_spark_closes(t, run.name) for t in show.index])
+        # display labels only (CSV keeps the plain names): percent columns
+        # get a % sign, e.g. hve_vs_prior_pct -> "hve_vs_prior %"
+        _pct_cfg = {c: st.column_config.NumberColumn(
+                        c[:-4] + ' %' if c.endswith('_pct') else c + ' %')
+                    for c in show.columns
+                    if (c.endswith('_pct') and c != 'rs_pct')   # rs = percentile
+                    or c in ('gain_5d', 'gain_1m')}
         st.dataframe(show, use_container_width=True,
                      height=min(120 + 35 * len(show), 700),
                      column_config={'spark': st.column_config.LineChartColumn(
-                         '120d', width=170)})
+                         '120d', width=170), **_pct_cfg})
         _tag = '_'.join(vr_inc) + ''.join(f'_not{x}' for x in vr_exc)
         d1, d2, _d3 = st.columns([1, 1, 3])
         d1.download_button('Download CSV', tbl.to_csv().encode(),
@@ -1124,8 +1317,8 @@ if ACTIVE_TAB == 'movers':
         'of the members have a bar. Past sessions use <i>today’s</i> member '
         'lists (survivorship bias)',
         '<b>Repeat hits</b>: over the last N sessions, how often a ticker made '
-        'the list. <b>Streak</b> = consecutive sessions up to the newest one. '
-        'Screener hits exist only for the days run_screeners.py ran',
+        'the top/bottom N. <b>Streak</b> = consecutive sessions up to the '
+        'newest one. Screener history lives in Confluence → Last N days',
     ])
     if not config.HISTORY_DB.exists() or not _mv('mover_dates', 'SP500'):
         st.warning('No movers yet — run `python3 run_screeners.py '
@@ -1154,27 +1347,19 @@ if ACTIVE_TAB == 'movers':
                               '% chg', format='%+.2f')})
 
     elif mv_view == 'Repeat hits':
-        sources = {f'{side} N · {name}': ('movers', ix, side)
+        sources = {f'{side} N · {name}': (ix, side)
                    for ix, name in MV_INDEX_NAMES.items()
                    for side in ('top', 'bottom')}
-        sources.update({f'screen · {sc}': ('screen', sc, None)
-                        for sc in _mv('screens')})
         c1, c2, c3 = st.columns([2, 1, 1])
         mv_src = c1.selectbox('Source', list(sources), key='mv_src',
-                              help='top/bottom N of an index, or any screener '
-                                   '(the in_* flags of each run)')
-        kind, key, side = sources[mv_src]
+                              help='top or bottom N of an index')
+        key, side = sources[mv_src]
         mv_days = c2.number_input('Last N sessions', 1, 250,
                                   config.REPEAT_DAYS, key='mv_days')
         mv_rn = c3.number_input('Top / bottom N', 1, 100, config.MOVERS_TOP_N,
-                                key='mv_rn', disabled=kind != 'movers')
-        if kind == 'movers':
-            rep = _mv('repeat_movers', key, int(mv_rn), side, int(mv_days))
-            label = f'{side}{int(mv_rn)}_{key}'
-        else:
-            rep = _mv('repeat_hits', key, int(mv_days))
-            rep = rep.drop(columns='avg_change_pct')
-            label = key
+                                key='mv_rn')
+        rep = _mv('repeat_movers', key, int(mv_rn), side, int(mv_days))
+        label = f'{side}{int(mv_rn)}_{key}'
         if rep.empty:
             st.info('No hits in this window.')
             st.stop()
@@ -1618,12 +1803,106 @@ def _confluence_cards(df_top: pd.DataFrame, circle_key: str):
     return '\n'.join(rows)
 
 
+def _confluence_history(scope, min_fam: int, must: list, days: int):
+    """Confluence over the last `days` stored runs (results/history.db):
+    per ticker, on how many runs it met Min families / Must include —
+    ranked by that count, then streak. Batch badges only."""
+    rows, sessions = _mv('confluence_window', days)
+    if not sessions:
+        st.warning('No Confluence history yet — run `python3 run_screeners.py '
+                   '--backfill-hits` once.')
+        return
+    rows = rows[rows['symbol'].isin(scope) & (rows['n_families'] >= min_fam)]
+    for fam in must:
+        rows = rows[rows['families'].str.split(',').apply(lambda fs: fam in fs)]
+    st.caption(f'{len(sessions)} runs: {sessions[-1]} → {sessions[0]} · '
+               f'{len(scope):,} tickers in scope · counted when ≥ {min_fam} '
+               'families' + (f' incl. {", ".join(must)}' if must else '')
+               + ' · batch badges only (no Patterns/Timing)')
+    if rows.empty:
+        st.info('No ticker met the filters on any of these runs.')
+        return
+    rep = repeat_table(rows[['snapshot_date', 'symbol']], sessions) \
+        .drop(columns='avg_change_pct').set_index('symbol')
+    fam = rows.groupby('symbol')['n_families']
+    rep['avg_families'] = fam.mean().round(1)
+    rep['max_families'] = fam.max()
+    today = rows[rows['snapshot_date'] == sessions[0]].set_index('symbol')
+    rep['families_today'] = today['n_families'].reindex(rep.index).astype('Int64')
+    rep['badges_today'] = today['badges'].reindex(rep.index)
+    rep = rep.rename(columns={'hits': 'days', 'sessions': 'of'})
+    rep = rep[['days', 'of', 'hit_rate', 'streak', 'avg_families',
+               'max_families', 'families_today', 'badges_today',
+               'first_hit', 'last_hit']]
+    rep = rep.join(full[['sector', 'industry']], how='left')
+    rep.index.name = 'ticker'
+    st.caption(f'{len(rep):,} tickers')
+    if len(rep) <= 200:
+        rep.insert(2, 'spark', [_spark_closes(t, run.name) for t in rep.index])
+    st.dataframe(rep, use_container_width=True,
+                 height=min(120 + 35 * len(rep), 720),
+                 column_config={
+                     'spark': st.column_config.LineChartColumn('120d', width=150),
+                     'hit_rate': st.column_config.ProgressColumn(
+                         'days %', format='%.0f%%', min_value=0, max_value=100)})
+    tag = f'confluence_last{days}_min{min_fam}'
+    d1, d2, _d3 = st.columns([1, 1, 3])
+    d1.download_button('Download CSV', rep.drop(columns='spark', errors='ignore')
+                       .to_csv().encode(), file_name=f'{tag}_{run.name}.csv')
+    d1.download_button('⭳ TradingView .txt', _tv_txt(rep, tag),
+                       file_name=f'{tag}_{run.name}.txt', mime='text/plain',
+                       help=_TV_HELP)
+    ln = d2.text_input('List name', key='cfh_list_name', placeholder='list name…')
+    if d2.button('Save as list', key='cfh_save_list', disabled=not ln.strip()):
+        dfil.save_list(ln.strip(), rep.index)
+        st.success(f'saved {len(rep)} tickers to my_lists/{ln.strip()}.csv')
+
+
 if ACTIVE_TAB == 'confluence':
+    _cf_fams = {}
+    for _code, _lbl, _fam, _t in confluence.BADGES:
+        _cf_fams.setdefault(_fam, []).append(_code)
+    _how_built('ℹ️ How Confluence is built', [
+        _universe_line(),
+        'Every screener answers yes/no per ticker; Confluence collects '
+        '<i>which</i> ones fired (a <b>badge</b> each) and ranks the names '
+        'where the most <b>independent method families</b> agree — a union '
+        'sorted by count, not an intersection',
+        '<b>Families</b> (a family counts once, however many of its badges '
+        'fire — Minervini, SCOOTER, RS90… are one idea, not five): '
+        + '; '.join(f'<b>{f}</b> {" ".join(c)}' for f, c in _cf_fams.items()),
+        '<b>n_families</b> (default rank) = families with ≥ 1 badge. '
+        '<b>n_badges</b> = all badges lit. <b>confluence_score</b> = 0–100, '
+        'at most 2 badges per family, normalised — a tie-breaker, not a '
+        'backtested expectancy',
+        'Stage 2A/2B/2C and the RTI zone show on the cards as faint context '
+        'pills, never counted. Pattern/timing badges (DB, C&H, PVB, ATR1, '
+        'blue/black dots) light up only when the Patterns / Timing tabs '
+        'have been run today',
+        '<b>Scope</b> (index, min market cap), <b>Min families</b> and '
+        '<b>Must include family</b> only filter the latest run — nothing is '
+        'recomputed. Details: <code>docs/confluence.md</code>',
+        '<b>Last N days</b>: every run saves each ticker’s families and '
+        'badges to <code>results/history.db</code> (batch badges only, so '
+        'all days count the same way). <b>days</b> = on how many of the last '
+        'N runs the ticker met Min families / Must include; sorted by days, '
+        'then streak (consecutive runs up to the newest). Past sessions are '
+        'recomputed as of their own date (<code>run_screeners.py '
+        '--backfill-days N</code>) with today’s screeners — but CANSLIM (ON) '
+        'and CANTATA (CE) use today’s fundamentals snapshot for every day',
+    ])
     st.caption('Badge-count leaders — the names lit up by the most independent '
                'method *families*. Pure aggregation over the latest daily run '
                f'(`{run.name}`); press "Re-run screeners" above to refresh. '
                'Pattern/timing badges (DB, C&H, PVB, ATR1, dots) appear only '
                'when the Patterns/Timing tabs have been run today.')
+
+    cf_mode = st.radio('Show', ['Today', 'Last N days'], key='cf_mode',
+                       horizontal=True,
+                       help='Today = the latest run, ranked by families. '
+                            'Last N days = how many of the last N runs each '
+                            'ticker met the filters below')
+    cf_hist = cf_mode == 'Last N days'
 
     cf1, cf2, cf3 = st.columns([3, 2, 2])
     cf_indexes = cf1.multiselect('Scope: index membership', index_choices(),
@@ -1632,15 +1911,20 @@ if ACTIVE_TAB == 'confluence':
     cf_cap = cf2.select_slider('Min market cap',
                                options=[0, 300e6, 1e9, 2e9, 10e9], value=0,
                                key='cf_cap', format_func=lambda v: f'${v:,.0f}')
-    cf_rank = cf3.selectbox('Rank by', ['n_families', 'n_badges',
-                                        'confluence_score'], key='cf_rank')
+    if cf_hist:
+        cf_days = cf3.number_input('Last N days (runs)', 1, 250, 20,
+                                   key='cf_days')
+    else:
+        cf_rank = cf3.selectbox('Rank by', ['n_families', 'n_badges',
+                                            'confluence_score'], key='cf_rank')
     cf4, cf5, cf6 = st.columns([2, 2, 2])
     cf_minfam = cf4.slider('Min families', 0, len(confluence.FAMILIES), 3,
                            key='cf_minfam')
     cf_must = cf5.multiselect('Must include family', confluence.FAMILIES,
                               key='cf_must')
-    cf_n = cf6.selectbox('Cards to show', [20, 30, 50, 100], index=1,
-                         key='cf_n')
+    if not cf_hist:
+        cf_n = cf6.selectbox('Cards to show', [20, 30, 50, 100], index=1,
+                             key='cf_n')
 
     # scope mask over `full` — no data load, no compute of screeners
     cf_mask = pd.Series(True, index=full.index)
@@ -1652,6 +1936,10 @@ if ACTIVE_TAB == 'confluence':
     if cf_cap:
         cf_mask &= pd.to_numeric(full['market_cap'], errors='coerce').fillna(0) >= cf_cap
     scoped = full[cf_mask]
+
+    if cf_hist:
+        _confluence_history(scoped.index, cf_minfam, cf_must, int(cf_days))
+        st.stop()
 
     cf_extra = confluence.merge_ondemand(report.run_dir(), scoped.index)
     st.caption(f'{len(scoped):,} tickers in scope · on-demand badges '
@@ -1747,9 +2035,6 @@ if ACTIVE_TAB == 'detail':
             lambda v: f'{v:,.3f}' if isinstance(v, float) else str(v))
         st.dataframe(detail, use_container_width=True, height=560)
 
-st.caption(f"Step-2 Filters module — Minervini / CANSLIM C-A-I / SCOOTER leaders; "
-           f"ATR-ext vs 21EMA & 40SMA, ADR, Weinstein stages, RTI focus metrics. "
-           f"Data: downloadData_v1 (universe + daily bars + financial snapshot).")
 
 # ------------------------------------------------- Timing Signals (on-demand)
 # feedback_4.md Task 4 — on-demand scoped computation, NOT the daily batch.

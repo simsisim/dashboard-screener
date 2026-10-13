@@ -120,3 +120,46 @@ leaders, never to the whole universe.
         +1.27 sigma. Some rules are ambiguous (which volatility, the +-0.25
         sigma flip) — expect a few iterations.
 - [ ] Second row of tabs once there are 2-3 Lab Report pages.
+
+## 7. Ticker detail: readable summary (added 2026-10-13, not started)
+
+The 📋 Ticker → Ticker detail tab shows one long metric dump that is hard to
+read. KEEP it as it is, and add above it an automatic plain-language summary
+per ticker, built from data we already have (no new downloads), e.g. NVDA:
+
+- **Price & trend** — close, day / 5d / 1m / 3m change, % from 52w high;
+  stage, Minervini count, GMMA state, RS percentile, SCOOTER.
+- **Confluence** — families + badges today; days at >= 3 families in the
+  last 20 (`history.db` confluence_daily); badges gained / lost recently
+  ("lost 52H after 10-06, GLP after 10-07").
+- **Volume records** — last HVE date (+ "none recent"), last HV1Y date with
+  1st / 2nd dch %.
+- **Index ranking** — S&P 500 / NASDAQ 100 rank over the last 5 sessions
+  (`mover_ranks`).
+- **Earnings** — last report: EPS vs estimate, surprise %, YoY growth;
+  next report date (`financial_data_0_5.csv`, qh1_* / next_earnings_date).
+
+Rule-based text (thresholds in config), not an LLM. Target format (NVDA,
+2026-10-12 session):
+
+    Price & trend
+    - Close 226.32: −1.3% on the day, −5.3% over 5 days, +3.7% over 1 month,
+      +6.9% over 3 months. 5.4% below its 52-week high.
+    - Stage 2B, Minervini 8/8, GMMA bullish, RS percentile 74.5, SCOOTER 78.
+    Confluence
+    - Today: 2 families (MM, GMMA, ON, CE) — just dropped below the >= 3 filter.
+    - Last 20 days: 16 of 20 at >= 3 families — a steady name.
+    - Lost 52H after 10-06, GLP after 10-07, NrH on 10-12 (fits the 5-day pullback).
+    Volume records
+    - No recent HVE: all-time volume record 2023-05-25.
+    - Last 1-year volume high 2026-02-26: −5.5% that day, −4.2% the next.
+    NASDAQ 100 ranking (last 5 sessions): rank 48–77 of ~95, worst 10-08 (−2.9%).
+    Earnings
+    - Last report 2026-08-26: EPS 2.22 vs 2.09 expected, +6.2% surprise,
+      +111% YoY. Next report: 2026-11-17.
+
+## 8. Navigation label (added 2026-10-13, not started)
+
+- [ ] First nav row: rename the group "🌍 Market" to "🌍 Market Movers"
+      (`TAB_GROUPS` in dashboard.py; also update the "Screener history lives
+      in Confluence" / README mentions of "Market").
