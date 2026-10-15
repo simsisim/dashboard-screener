@@ -223,9 +223,13 @@ def main():
     for b in at2.button:
         if b.label == 'Reset Filters':
             b.click().run()
+    # the list name then re-fills with the screen-label default (38ad458)
     check('reset: clears name inputs',
           ss(at2.session_state, 'save_as_name') == ''
-          and ss(at2.session_state, 'save_list_name') == '')
+          and ss(at2.session_state, 'save_list_name') != 'junk'
+          and ss(at2.session_state, 'save_list_name')
+          == ss(at2.session_state, '_auto_list_name'),
+          f"list={ss(at2.session_state, 'save_list_name')!r}")
 
     # ---- 5b. tab bar: first Combine pick keeps the section; All Results
     # state survives a trip to another section (st.tabs snapped back) -------
@@ -517,6 +521,53 @@ def main():
               _rt is not None and not wf_mod.validate_workflow(_rt),
               f'stages={len(_rt["stages"]) if _rt else 0}')
     _wf_test.unlink(missing_ok=True)
+
+    # ---- 9. Growth Cycle tab (Market Health; src/growth_cycle.py) ---------
+    at10 = _app('growth', 300)
+    at10.run()
+    check('growth cycle tab: boot 0 exceptions', len(at10.exception) == 0,
+          at10.exception[0].message[:120] if at10.exception else '')
+    check('growth cycle tab: nav row 1 = Market Health',
+          ss(at10.session_state, 'tab_group') == '🩺 Market Health')
+    check('growth cycle tab: zone banner + 4 metrics',
+          any('day ' in str(m.value) and 'in zone' in str(m.value)
+              for m in at10.markdown) and len(at10.metric) == 4,
+          f'metrics={len(at10.metric)}')
+    at10.radio(key='gc_span').set_value('All').run()
+    at10.slider(key='gc_path_n').set_value(60).run()
+    check('growth cycle tab: range / path controls rerun cleanly',
+          len(at10.exception) == 0,
+          at10.exception[0].message[:120] if at10.exception else '')
+
+    # ---- 10. Sustainability Ratio panels (src/sr_panels.py) --------------
+    at11 = _app('sr', 300)
+    at11.run()
+    check('sustainability ratio tab: boot 0 exceptions, no data warnings',
+          len(at11.exception) == 0 and len(at11.warning) == 0,
+          at11.exception[0].message[:120] if at11.exception
+          else str([w.value for w in at11.warning]))
+    for _lay in ('Sectors (SPY + 11 SPDRs)', 'XLP : XLY'):
+        at11.selectbox(key='sr_layout').set_value(_lay).run()
+    at11.checkbox(key='sr_log').check().run()
+    at11.radio(key='sr_span').set_value('5Y').run()
+    # builder: ＋ Add chart appends a row and it is drawn
+    _n0 = len(ss(at11.session_state, 'sr_build', []))
+    at11.button(key='sr_add').click().run()
+    check('sustainability ratio tab: builder adds a chart',
+          len(ss(at11.session_state, 'sr_build', [])) == _n0 + 1
+          and len(at11.exception) == 0,
+          str(ss(at11.session_state, 'sr_build')))
+    # Save layout -> the Layout list shows AND selects it in the same click
+    at11.text_input(key='sr_save_name').set_value('apptest_layout').run()
+    at11.button(key='sr_save_btn').click().run()
+    check('sustainability ratio tab: saved layout listed + selected',
+          at11.selectbox(key='sr_layout').value == '💾 apptest_layout',
+          str(at11.selectbox(key='sr_layout').value))
+    (ROOT / 'my_layouts' / 'apptest_layout.json').unlink(missing_ok=True)
+    check('sustainability ratio tab: presets / log / range rerun cleanly',
+          len(at11.exception) == 0 and len(at11.warning) == 0,
+          at11.exception[0].message[:120] if at11.exception
+          else str([w.value for w in at11.warning]))
 
     print()
     ok_all = True

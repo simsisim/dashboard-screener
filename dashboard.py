@@ -148,6 +148,8 @@ TABS = {
     'workflows': '🧭 Workflows',
     'detail': '📋 Ticker detail',
     'leadermap': '📍 Where is each leader?',
+    'growth': '🌱 Growth Cycle',
+    'sr': '⚖️ Sustainability Ratio',
 }
 # Only the active section's widgets are drawn, and Streamlit drops the state
 # of any keyed widget not drawn in a run — so switching tabs would wipe e.g.
@@ -164,10 +166,12 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'vr_save_list', 'vr_reset', 'vrd_peb', 'vrd_reset_btn',
                'mv_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
-               'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv'}
+               'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv',
+               'sr_save_btn', 'sr_add', 'sr_del_btn'}
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
                       'wf_dupe_', 'wf_dropstg_', 'lead_tv_', 'wf_stage_csv_',
-                      'wf_stage_tv_', 'lm_setups_')
+                      'wf_stage_tv_', 'lm_setups_', 'sr_up', 'sr_dn',
+                      'sr_rm')
 for _k in list(st.session_state.keys()):
     if _k not in _NO_PERSIST and not _k.startswith(_NO_PERSIST_PREFIX):
         st.session_state[_k] = st.session_state[_k]
@@ -180,6 +184,7 @@ TAB_GROUPS = {
     '🔎 Screen': ['all', 'confluence', 'workflows', 'presets'],
     '📡 Signals': ['volume', 'patterns'],
     '🌍 Market Movers': ['movers'],
+    '🩺 Market Health': ['growth', 'sr'],
     '📋 Ticker': ['detail', 'leadermap'],
 }
 TAB_SUBROWS = {'presets': ['leaders', 'focus']}
@@ -1489,6 +1494,398 @@ if ACTIVE_TAB == 'movers':
             t2.dataframe(hits, use_container_width=True, hide_index=True,
                          height=500)
 
+# ------------------------------------------------- Growth Cycle -----------
+# PrimeTrading Lab Report "Growth Cycle": growth / value (IWF / IWD) risk
+# gate x momentum -> six zones (src/growth_cycle.py, TODO.md §6). Computed
+# on load (~0.5 s, 3 tickers), cached per IWF file version.
+GC_COLORS = {'Risk-off': '#e07a7a', 'Probe': '#d9b86c', 'Ramp Up': '#4caf50',
+             'Trim': '#2f6fd6', 'Hold': '#8fa6bf', 'Reload': '#7f9c7a'}
+GC_ACTION = {'Risk-off': 'Defensive — build the watchlist',
+             'Probe': 'Growth improving, gate not reclaimed — test small',
+             'Ramp Up': 'Fresh risk-on, momentum rising — build into leaders',
+             'Trim': 'Strong but stretched — harvest, don’t chase',
+             'Hold': 'Extended but digesting — let winners work, no new size',
+             'Reload': 'Pullback inside risk-on — leaders back to support '
+                       '(watch for a failed reload)'}
+
+
+@st.cache_data(show_spinner=False)
+def _gc_model(_version: float):
+    from src import growth_cycle
+    data = growth_cycle.load_inputs()
+    model = growth_cycle.compute(growth_cycle.ratio_bars(data))
+    stats = growth_cycle.zone_stats(model, data['close'][config.GC_STATS_TICKER],
+                                    config.GC_HISTORY_START)
+    return model, stats, growth_cycle.zone_episodes(model)
+
+
+if ACTIVE_TAB == 'growth':
+    import altair as alt
+    _how_built('ℹ️ How the Growth Cycle is built', [
+        f'<b>Ratio</b> = growth / value = {config.GC_GROWTH} / '
+        f'{config.GC_VALUE} daily bars (downloadData_v1). Rebuilt from '
+        'PrimeTrading’s Lab Report “Growth Cycle” — only its public '
+        'description and screenshots; calibrated on his readings Sep 18 – '
+        'Oct 9 2026 (<code>test_growth_cycle.py</code>)',
+        f'<b>10w structure</b> = EMA{config.GC_STRUCT_WEEKS} of the ratio’s '
+        'weekly highs and weekly lows; the current week counts, so the band '
+        'moves daily. <b>Risk gate</b>: close above the band = risk-on, below '
+        '= risk-off, inside = keeps the last side',
+        f'<b>Momentum</b> (x) = {config.GC_MOM_DAYS}-day change of the gap '
+        f'to the band’s upper line, {config.GC_MOM_SMOOTH}-day mean, over its '
+        f'own {config.GC_SIGMA_DAYS}-day σ; rising while > '
+        f'+{config.GC_MOM_RISING}σ. <b>Gate σ</b> (y) = distance outside '
+        f'the band in σ of that gap; extended above +{config.GC_EXTENDED}σ',
+        '<b>Zones</b>: risk-off + fading = Risk-off · risk-off + rising = '
+        'Probe · risk-on + rising = Ramp Up (Trim when extended) · risk-on + '
+        'fading = Reload (Hold when extended). Day N = sessions in the zone',
+        f'<b>Zone stats</b>: next {config.GC_STATS_FWD} sessions after each '
+        f'day in the zone since {config.GC_HISTORY_START} — '
+        f'{config.GC_STATS_TICKER} up %, its average move, and how often '
+        'growth beat value. Zones describe the environment, not buy / sell '
+        'signals',
+    ])
+    _iwf = config.DAILY_CURRENT / f'{config.GC_GROWTH}.csv'
+    gc_m, gc_stats, gc_ep = _gc_model(_iwf.stat().st_mtime if _iwf.exists() else 0)
+    if gc_m.empty:
+        st.warning(f'No {config.GC_GROWTH} / {config.GC_VALUE} data.')
+        st.stop()
+    _t = gc_m.iloc[-1]
+    _z = _t['zone']
+    _gate = (f'Risk-on · since {_t.gate_since:%b %d}' if _t.risk_on
+             else f'Risk-off · since {_t.gate_since:%b %d}')
+    _mom = 'rising' if _t.momentum_sigma > config.GC_MOM_RISING else 'fading'
+    st.markdown(
+        f'<div style="background:{GC_COLORS[_z]};color:white;padding:0.8rem '
+        f'1.2rem;border-radius:0.5rem;margin-bottom:0.8rem">'
+        f'<span style="font-size:1.8rem;font-weight:700">{_z}</span>'
+        f'&nbsp;&nbsp;<span style="font-size:1.05rem">{_gate} — momentum '
+        f'{_mom} · day {_t.day_in_zone} in zone · {_t.name:%a %Y-%m-%d} '
+        f'close</span><br><span style="font-size:0.95rem">{GC_ACTION[_z]}'
+        f'</span></div>', unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric('Ratio vs 10w band', f'{_t.ratio:.4f}',
+              f'band {_t.lower:.4f} – {_t.upper:.4f}', delta_color='off')
+    k2.metric('Momentum', f'{_t.momentum_sigma:+.2f}σ',
+              f'{_t.momentum_sigma - gc_m.momentum_sigma.iloc[-2]:+.2f}σ vs prior')
+    k3.metric('Gate σ (outside band)', f'{_t.gate_sigma:+.2f}σ',
+              f'gap to upper line {_t.gap_pct:+.2f}%', delta_color='off')
+    k4.metric('Stretch vs 21d EMA', f'{_t.stretch_sigma:+.2f}σ',
+              f'{_t.stretch_pct:+.2f}%', delta_color='off')
+
+    _zscale = alt.Scale(domain=list(GC_COLORS), range=list(GC_COLORS.values()))
+    c_map, c_ratio = st.columns([1, 1])
+    with c_map:
+        gc_path_n = st.slider('Path: last N sessions', 5, 60, 20, key='gc_path_n')
+        _p = gc_m.tail(gc_path_n).rename_axis('Date').reset_index()
+        _xr = max(3.0, float(_p.momentum_sigma.abs().max()) + 0.5)
+        _yr = max(2.5, float(_p.gate_sigma.abs().max()) + 0.5)
+        _mx, _ex = config.GC_MOM_RISING, config.GC_EXTENDED
+        _regions = pd.DataFrame([
+            ('Risk-off', -_xr, _mx, -_yr, 0), ('Probe', _mx, _xr, -_yr, 0),
+            ('Reload', -_xr, _mx, 0, _ex), ('Ramp Up', _mx, _xr, 0, _ex),
+            ('Hold', -_xr, _mx, _ex, _yr), ('Trim', _mx, _xr, _ex, _yr)],
+            columns=['zone', 'x', 'x2', 'y', 'y2'])
+        _bg = alt.Chart(_regions).mark_rect().encode(
+            x=alt.X('x:Q', scale=alt.Scale(domain=[-_xr, _xr]),
+                    title='Momentum (σ) — + = rising'),
+            x2='x2', y=alt.Y('y:Q', scale=alt.Scale(domain=[-_yr, _yr]),
+                             title='Risk gate — σ outside the 10w band'),
+            y2='y2', color=alt.Color('zone:N', scale=_zscale, legend=None))
+        _lbl = alt.Chart(_regions.assign(xm=lambda d: (d.x + d.x2) / 2,
+                                         ym=lambda d: (d.y + d.y2) / 2)
+                         ).mark_text(fontWeight='bold').encode(
+            x='xm:Q', y='ym:Q', text='zone:N')
+        _line = alt.Chart(_p).mark_line(color='white', strokeWidth=2.5).encode(
+            x='momentum_sigma:Q', y='gate_sigma:Q', order='Date:T')
+        _pts = alt.Chart(_p).mark_circle(size=60, opacity=1, stroke='black',
+                                          strokeWidth=1).encode(
+            x='momentum_sigma:Q', y='gate_sigma:Q',
+            color=alt.Color('zone:N', scale=_zscale, legend=None),
+            tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone',
+                     alt.Tooltip('momentum_sigma:Q', format='+.2f', title='momentum σ'),
+                     alt.Tooltip('gate_sigma:Q', format='+.2f', title='gate σ'),
+                     'day_in_zone'])
+        _now = alt.Chart(_p.tail(1)).mark_point(size=260, color='black',
+                                                strokeWidth=2).encode(
+            x='momentum_sigma:Q', y='gate_sigma:Q')
+        st.altair_chart((_bg + _lbl + _line + _pts + _now).properties(height=420),
+                        use_container_width=True)
+        st.caption('Gate σ is 0 while the ratio is inside the band — the risk '
+                   'gate then keeps its last side, so a point on the line can be '
+                   'either Reload or Risk-off.')
+    with c_ratio:
+        gc_span = st.radio('Range', ['3M', '6M', '1Y', '2Y', 'All'], index=2,
+                           horizontal=True, key='gc_span')
+        _days = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504}.get(gc_span, len(gc_m))
+        _r = gc_m.tail(_days).rename_axis('Date').reset_index()
+        _band = alt.Chart(_r).mark_area(color='#3d5a78').encode(
+            x=alt.X('Date:T', title=None),
+            y=alt.Y('lower:Q', scale=alt.Scale(zero=False),
+                    title=f'{config.GC_GROWTH} / {config.GC_VALUE}'),
+            y2='upper:Q')
+        _rp = alt.Chart(_r).mark_circle(size=30, opacity=1).encode(
+            x='Date:T', y='ratio:Q',
+            color=alt.Color('zone:N', scale=_zscale,
+                            legend=alt.Legend(orient='bottom', title=None)),
+            tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone',
+                     alt.Tooltip('ratio:Q', format='.4f'),
+                     alt.Tooltip('lower:Q', format='.4f'),
+                     alt.Tooltip('upper:Q', format='.4f')])
+        st.altair_chart((_band + _rp).properties(height=440),
+                        use_container_width=True)
+
+    st.markdown(f'**Zone every day since {config.GC_HISTORY_START[:4]}**')
+    _s = gc_m.loc[config.GC_HISTORY_START:].rename_axis('Date').reset_index()
+    _s['next'] = _s.Date.shift(-1).fillna(_s.Date.iloc[-1] + pd.Timedelta(days=1))
+    st.altair_chart(alt.Chart(_s).mark_rect().encode(
+        x=alt.X('Date:T', title=None), x2='next:T',
+        color=alt.Color('zone:N', scale=_zscale,
+                        legend=alt.Legend(orient='bottom', title=None)),
+        tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone', 'day_in_zone']
+    ).properties(height=70), use_container_width=True)
+
+    s1, s2 = st.columns([1, 1])
+    with s1:
+        st.markdown(f'**Zone stats** — next {config.GC_STATS_FWD} sessions, '
+                    f'since {config.GC_HISTORY_START[:4]}')
+        st.dataframe(gc_stats.reset_index(), hide_index=True,
+                     use_container_width=True, column_config={
+                         'zone': 'Zone', 'days': 'Days', 'episodes': 'Episodes',
+                         'up_pct': st.column_config.NumberColumn(
+                             f'{config.GC_STATS_TICKER} up %', format='%.0f%%'),
+                         'avg_move_pct': st.column_config.NumberColumn(
+                             f'{config.GC_STATS_TICKER} avg move', format='%+.1f%%'),
+                         'growth_won_pct': st.column_config.NumberColumn(
+                             'Growth beat value', format='%.0f%%')})
+    with s2:
+        st.markdown('**Recent zone changes**')
+        _e = gc_ep.tail(12).iloc[::-1].copy()
+        _e['start'] = _e.start.dt.strftime('%Y-%m-%d')
+        _e['end'] = _e.end.dt.strftime('%Y-%m-%d')
+        st.dataframe(_e, hide_index=True, use_container_width=True, column_config={
+            'zone': 'Zone', 'start': 'From', 'end': 'To', 'sessions': 'Sessions',
+            'ratio_chg_pct': st.column_config.NumberColumn('Ratio chg',
+                                                           format='%+.2f%%')})
+
+# ------------------------------------------ Sustainability Ratio ----------
+# Stacked daily panels of tickers / ratios (src/sr_panels.py) — replaces the
+# CSV-driven PNGs of market_manipulation/market_charts. Layout = a built-in
+# preset or a saved my_layouts/*.json, edited in a table on the page.
+@st.cache_data(show_spinner=False)
+def _sr_data(tickers: tuple, _version: float):
+    from src import sr_panels
+    d = sr_panels.load(list(tickers))
+    return {'close': d['close'], 'open': d['open']}
+
+
+if ACTIVE_TAB == 'sr':
+    import altair as alt
+    from src import sr_panels as srp
+    _how_built('ℹ️ How the Sustainability Ratio panels are built', [
+        'Daily closes from downloadData_v1, one chart per panel, all on the '
+        'same date range. <b>Ticker</b> = its close · <b>Ratio</b> = close A '
+        '/ close B · <b>Ratio no gaps</b> = both legs gap-adjusted, then A / '
+        'B: from the start date on, every overnight gap (open − prior close) '
+        'is summed and taken off the close, so only intraday moves remain '
+        '(market_charts <code>gap_adjust.py</code> / SR_v1.pine). Start date '
+        'empty = first day of the range',
+        'Moving averages (EMA21, SMA50, SMA150, SMA200) are computed on the '
+        'full history, so they are valid from the first bar shown. The line '
+        'under each title: close vs each MA, 1W = 5 sessions, 1M = 21',
+        f'Layouts: built-in presets, or your own saved as JSON in '
+        f'<code>my_layouts/</code>. Up to {srp.MAX_PANELS} panels',
+    ])
+    _saved = srp.list_layouts()
+    _opts = list(srp.PRESETS) + [f'💾 {n}' for n in _saved]
+    if '_sr_select' in st.session_state:          # just saved -> show it
+        st.session_state['sr_layout'] = st.session_state.pop('_sr_select')
+    if st.session_state.get('sr_layout') not in _opts:
+        st.session_state.pop('sr_layout', None)
+    if st.session_state.get('_sr_flash'):
+        st.success(st.session_state.pop('_sr_flash'))
+    c1, c2, c3, c4 = st.columns([2.2, 1.8, 0.8, 2.0])
+    sr_layout = c1.selectbox('Layout', _opts, key='sr_layout')
+    sr_span = c2.radio('Range', ['3M', '6M', '1Y', '2Y', '5Y'], index=3,
+                       horizontal=True, key='sr_span')
+    sr_log = c3.checkbox('Log scale', key='sr_log')
+    sr_mas = c4.multiselect('Moving averages', [m[0] for m in srp.MAS],
+                            default=[m[0] for m in srp.MAS], key='sr_mas')
+    # fixed figure size: 700 px split over the panels (>= 140 px each)
+    _h, _w = 700, 1100
+    _base = (srp.load_layout(sr_layout[2:]) if sr_layout.startswith('💾 ')
+             else srp.PRESETS[sr_layout]) or []
+
+    # ---- builder: the working layout lives in session state; picking
+    # another Layout reloads it. Row widgets carry a nonce in their key so
+    # add / move / remove redraw them from the list.
+    if st.session_state.get('_sr_src') != sr_layout:
+        st.session_state['_sr_src'] = sr_layout
+        st.session_state['sr_build'] = [dict(p) for p in _base]
+        st.session_state['sr_nonce'] = st.session_state.get('sr_nonce', 0) + 1
+    _bl = st.session_state['sr_build']
+    _nc = st.session_state['sr_nonce']
+    for _k in [k for k in st.session_state                # rows of old nonces
+               if re.fullmatch(r'sr_(t|a|b|up|dn|rm)\d+_(\d+)', str(k))
+               and not str(k).endswith(f'_{_nc}')]:
+        del st.session_state[_k]
+    _choices = srp.ticker_choices()
+
+    def _sr_move(i: int, j: int):
+        b = st.session_state['sr_build']
+        b[i], b[j] = b[j], b[i]
+        st.session_state['sr_nonce'] += 1
+
+    def _sr_remove(i: int):
+        st.session_state['sr_build'].pop(i)
+        st.session_state['sr_nonce'] += 1
+
+    def _sr_add():
+        st.session_state['sr_build'].append({'type': 'Ticker', 'a': 'SPY', 'b': ''})
+        st.session_state['sr_nonce'] += 1
+
+    with st.expander(f'🛠 Build / edit layout — {len(_bl)} chart'
+                     f'{"s" if len(_bl) != 1 else ""}'):
+        for _i, _row in enumerate(_bl):
+            _opts_t = list(_choices) + [t for t in (_row['a'], _row['b'])
+                                        if t and t not in _choices]
+
+            def _fmt_t(t):
+                return f'{t} — {_choices[t]}' if _choices.get(t) else t
+            _dflt_b = 'QQQ' if _row['a'] == 'SPY' else 'SPY'
+            r0, r1, r2, r3, r4 = st.columns([0.5, 1.4, 2.4, 2.4, 1.2])
+            r0.markdown(f'**{_i + 1}**')
+            _row['type'] = r1.selectbox(
+                'Type', srp.PANEL_TYPES, key=f'sr_t{_i}_{_nc}',
+                index=srp.PANEL_TYPES.index(_row['type']),
+                label_visibility='collapsed')
+            _row['a'] = r2.selectbox(
+                'Ticker / A', _opts_t, key=f'sr_a{_i}_{_nc}', format_func=_fmt_t,
+                index=_opts_t.index(_row['a']) if _row['a'] in _opts_t else 0,
+                label_visibility='collapsed')
+            if _row['type'] != 'Ticker':
+                _row['b'] = r3.selectbox(
+                    'B', _opts_t, key=f'sr_b{_i}_{_nc}', format_func=_fmt_t,
+                    index=_opts_t.index(_row['b']) if _row['b'] in _opts_t
+                    else _opts_t.index(_dflt_b) if _dflt_b in _opts_t else 0,
+                    label_visibility='collapsed')
+            else:
+                r3.markdown('<span style="color:gray">—</span>',
+                            unsafe_allow_html=True)
+            b1, b2, b3 = r4.columns(3)
+            b1.button('↑', key=f'sr_up{_i}_{_nc}', disabled=_i == 0,
+                      on_click=_sr_move, args=(_i, _i - 1), help='Move up')
+            b2.button('↓', key=f'sr_dn{_i}_{_nc}', disabled=_i == len(_bl) - 1,
+                      on_click=_sr_move, args=(_i, _i + 1), help='Move down')
+            b3.button('✕', key=f'sr_rm{_i}_{_nc}', on_click=_sr_remove,
+                      args=(_i,), help='Remove chart')
+        st.button('＋ Add chart', key='sr_add', on_click=_sr_add,
+                  disabled=len(_bl) >= srp.MAX_PANELS)
+        st.caption(f'Tickers: the first {config.SR_TICKER_LIST_N} rows of '
+                   f'<code>{config.SR_TICKER_LIST.name}</code> (indexes, '
+                   'sectors, styles, bonds). Changes show right away; they '
+                   'are kept only once saved.', unsafe_allow_html=True)
+        e1, e2, e3, e4 = st.columns([1.3, 1.6, 0.9, 0.9])
+        sr_gap_start = e1.date_input('No-gaps start (empty = range start)',
+                                     value=None, key='sr_gap_start')
+        _sv_name = e2.text_input('Save layout as…', key='sr_save_name',
+                                 placeholder='layout name')
+        e3.write('')
+        if e3.button('💾 Save layout', key='sr_save_btn',
+                     disabled=not _sv_name.strip() or not _bl):
+            # the Layout list above is already drawn: rerun so it lists
+            # (and selects) the new file
+            _p = srp.save_layout(_sv_name, _bl)
+            st.session_state['_sr_select'] = f'💾 {_p.stem}'
+            st.session_state['_sr_src'] = f'💾 {_p.stem}'    # keep the rows
+            st.session_state['_sr_flash'] = f'Saved layout “{_p.stem}” ({_p.name}).'
+            st.rerun()
+        e4.write('')
+        if sr_layout.startswith('💾 ') and e4.button(
+                f'🗑 Delete “{sr_layout[2:]}”', key='sr_del_btn'):
+            srp.delete_layout(sr_layout[2:])
+            st.session_state['_sr_flash'] = f'Deleted layout “{sr_layout[2:]}”.'
+            st.rerun()
+
+    sr_panels = srp.clean_panels(_bl)
+    if not sr_panels:
+        st.info('No charts — add one in 🛠 Build / edit layout.')
+        st.stop()
+    _spy = config.DAILY_CURRENT / 'SPY.csv'
+    _d = _sr_data(tuple(srp.tickers_of(sr_panels)),
+                  _spy.stat().st_mtime if _spy.exists() else 0)
+    _n = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260}[sr_span]
+    _dates = _d['close'].dropna(how='all').index[-_n:]
+    _x0, _x1 = _dates[0], _dates[-1]
+    _gs = pd.Timestamp(sr_gap_start) if sr_gap_start else _x0
+    try:
+        _dark = st.context.theme.type == 'dark'
+    except AttributeError:
+        _dark = True
+    _line = '#e5e7eb' if _dark else '#111827'
+    _ma_col = {m[0]: m[3] for m in srp.MAS}
+
+    # one figure, panels stacked on a shared date axis (labels on the
+    # bottom panel only); drag / wheel zooms all panels, hover draws the
+    # same date line through every panel
+    _views = []
+    for _pn in sr_panels:
+        _s = srp.panel_series(_pn, _d, _gs)
+        _lbl = srp.label(_pn)
+        if _s is None:
+            st.warning(f'{_lbl}: no daily data in downloadData_v1 for '
+                       f'{", ".join(t for t in (_pn["a"], _pn["b"]) if t)}.')
+            continue
+        _df = srp.with_mas(_s)
+        _sub = srp.status(_df)
+        _df = _df.loc[_x0:_x1]
+        if _df.empty:
+            st.warning(f'{_lbl}: no bars in the selected range.')
+            continue
+        _views.append((_lbl, _df, _sub))
+    if not _views:
+        st.stop()
+    st.markdown(' &nbsp; '.join(
+        f'<span style="color:{_ma_col[m]};font-weight:600">━ {m}</span>'
+        for m in sr_mas), unsafe_allow_html=True)
+    _ph = max(140, _h // len(_views))
+    _zoom = alt.selection_interval(bind='scales', encodings=['x'], name='zoom')
+    _hover = alt.selection_point(fields=['Date'], nearest=True, on='pointerover',
+                                 clear='pointerout', empty=False, name='hover')
+    _charts = []
+    for _k, (_lbl, _df, _sub) in enumerate(_views):
+        _last = _k == len(_views) - 1
+        _v = _df['value'].iloc[-1]
+        _fmt = '.2f' if abs(_v) >= 10 else '.4f'
+        _long = (_df[['value'] + sr_mas].rename(columns={'value': _lbl})
+                 .rename_axis('Date').reset_index()
+                 .melt('Date', var_name='series', value_name='val').dropna())
+        _x = alt.X('Date:T', title=None, scale=alt.Scale(domain=[_x0, _x1]),
+                   axis=alt.Axis(labels=_last, ticks=_last, format='%b %y'))
+        _y = alt.Y('val:Q', title=None, scale=alt.Scale(
+            type='log' if sr_log else 'linear', zero=False))
+        _base_ch = alt.Chart(_long).encode(x=_x)
+        _lines = _base_ch.mark_line().encode(
+            y=_y,
+            color=alt.Color('series:N', legend=None, scale=alt.Scale(
+                domain=[_lbl] + sr_mas,
+                range=[_line] + [_ma_col[m] for m in sr_mas])),
+            strokeWidth=alt.condition(alt.datum.series == _lbl,
+                                      alt.value(1.8), alt.value(1.1)))
+        _main = _long[_long.series == _lbl]
+        _pts = alt.Chart(_main).mark_point(opacity=0, size=60).encode(
+            x=_x, y=_y,
+            tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'),
+                     alt.Tooltip('val:Q', format=_fmt, title=_lbl)])
+        _rule = _base_ch.mark_rule(color='gray').encode().transform_filter(_hover)
+        _layer = alt.layer(_lines, _rule, _pts).properties(
+            width=_w, height=_ph, title=alt.TitleParams(
+                f'{_lbl}  {_v:{_fmt}}', subtitle=_sub, anchor='start',
+                fontSize=14, subtitleColor='gray'))
+        _charts.append(_layer.add_params(_zoom, _hover))
+    st.altair_chart(alt.vconcat(*_charts, spacing=6).resolve_scale(
+        x='shared', y='independent'), use_container_width=False)
+
 # ------------------------------------------ Where is each leader? --------
 # PrimeTrading Lab Report "Leaders Map" for a user list FILE (no presets):
 # each ticker on two clocks in daily ATR14 units — x = vs the 21-day EMA,
@@ -2420,6 +2817,10 @@ if ACTIVE_TAB == 'patterns':
         # ---- annotated cup & handle chart for a selected ticker ----
         if not pt_pattern.startswith('Green Line') and len(show_pt):
             st.markdown('---')
+            # a kept pick from an earlier result list (persisted state)
+            # would come back as the value although it's not an option
+            if st.session_state.get('pt_chart_ticker') not in show_pt.index:
+                st.session_state.pop('pt_chart_ticker', None)
             chart_t = st.selectbox(
                 'Annotated chart (K-A-B-C-D, stages, target/stop, RCQ/HQ/CQ)',
                 list(show_pt.index), key='pt_chart_ticker')

@@ -235,6 +235,29 @@ HVE_RECENT_BARS = 50        # hve_count_50 window (trading bars)
 MA21S_LENGTH = 21           # script: dailyLength = 21, dailyType = 'EMA'
 MA21S_PULLBACK_PCT = 2.0    # user: close within +-2% of the band (inside
                             # counts as 0) + trend up = pullback mode
+# --- Growth Cycle (PrimeTrading Lab Report; src/growth_cycle.py, TODO §6).
+# Calibrated on his public readings 2026-09-18 .. 10-09 ---
+GC_GROWTH, GC_VALUE = 'IWF', 'IWD'  # ratio = growth / value
+GC_STATS_TICKER = 'QQEW'    # zone stats (he uses QQQE, the Direxion twin)
+GC_STRUCT_WEEKS = 10        # "10w structure": EMA10 of weekly highs / lows
+GC_MOM_DAYS = 10            # momentum = 10-day change in the gap ...
+GC_MOM_SMOOTH = 3           # ... 3-day mean ...
+GC_SIGMA_DAYS = 63          # ... over its own 63-day std (also Y / stretch)
+GC_MOM_RISING = 0.20        # rising while momentum > this. His cut is
+                            # +0.25σ, but ours reads ~8% lower (Oct 8: his
+                            # +0.25 Ramp Up = our 0.23; Oct 9 0.00 = Reload)
+GC_GATE_TOL_PCT = 0.05      # close within 0.05% under the upper line still
+                            # counts as above: data-source noise (Sep 18 is
+                            # his risk-on day, ours -0.012%)
+GC_EXTENDED = 1.3           # Y "extended above +1.3σ" -> Trim / Hold
+GC_STRETCH_EMA = 21         # stretch = ratio vs its 21-day EMA (shown only)
+GC_STATS_FWD = 20           # zone stats: next 20 sessions
+GC_HISTORY_START = '2022-01-01'  # zone strip + stats window
+# --- Sustainability Ratio panels (src/sr_panels.py): the builder's ticker
+# picker = the first N rows of downloadData_v1's index list (indexes,
+# sectors, styles, bonds; row 50 = QQEW; special industries come after) ---
+SR_TICKER_LIST = DOWNLOAD_ROOT / 'user_input' / 'indexes_tickers.csv'
+SR_TICKER_LIST_N = 50
 HV1Y_BARS = 252             # HV1Y (highest volume in 1 year) window; metaVolume
                             # uses 365 calendar days (HV1Y_window_days) ~ same
 HVE_MATCH_TOL = 0.01        # baseline record vs today's file volume on that

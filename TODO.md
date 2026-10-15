@@ -120,6 +120,46 @@ leaders, never to the whole universe.
         day 7; risk-on since Sep 18; momentum +1.86 sigma; 21d stretch
         +1.27 sigma. Some rules are ambiguous (which volatility, the +-0.25
         sigma flip) — expect a few iterations.
+      - Research 2026-10-15 (his X posts / Substack via Grok; the image
+        descriptions are second-hand). Calibration timeline: Sep 18 risk-on
+        + Ramp Up starts · 9/28 day 7 · Oct 6 day 13, momentum +0.73σ,
+        band 0.4857–0.4989 (ratio 0.5040 on the image) · Oct 8 day 15,
+        +0.25σ · Oct 9 → Reload (risk-on intact, momentum cooled) · Oct 13
+        "at support", momentum cooled considerably. No public Probe / Trim /
+        Hold day. Day counter = trading days in the current zone, first
+        day = 1 (fits all three readings).
+      - Dashboard = 2-D plot. Y = Risk Gate (ratio vs 10w structure, in σ
+        outside the band, "extended above +1.3σ"), X = momentum σ. Zones:
+        Risk-off bottom-left, Probe bottom-right, Ramp Up top-right, Trim
+        far top-right, Hold top-left high, Reload mid-left → working rule:
+        off+fading = Risk-off, off+rising = Probe, on+rising = Ramp Up
+        (Trim if Y > +1.3σ), on+fading = Reload (Hold if Y > +1.3σ).
+      - First numbers (scratch script, 2026-10-15): upper line = EMA10 of
+        weekly ratio highs (H_iwf/H_iwd), current partial week included →
+        0.4989 on Oct 6–8 = his exactly. Lower = EMA10 of weekly lows
+        0.4874 vs his 0.4857 (open). Gate: first close >= upper on Sep 18
+        (tie 0.4897), Oct 13 exactly at the upper line ("at support").
+        Momentum = 10d change of (ratio / upper − 1), 3d mean, / its own
+        63d std: 9/28 1.73 (his 1.86), Oct 6 0.73 (0.73), Oct 8 0.23
+        (0.25), Oct 9 0.00 (→ Reload) — so "fading" = below +0.25σ, no
+        −0.25 dead-band. Stretch C/EMA21 − 1 over its 63d std: 9/28 1.22
+        (his 1.27). Still open: Y-axis σ unit, the +1.7% gap figure, the
+        ratio 0.5040 vs our Oct 6 0.5132 (image date?).
+      - [x] Model DONE 2026-10-15: `src/growth_cycle.py` (config `GC_*`),
+        `test_growth_cycle.py` reproduces his timeline (risk-on Sep 18,
+        Ramp Up day 7 / 13 / 15, Reload Oct 9, no Trim/Hold in between).
+        Fitted: rising cut 0.20 (his 0.25, ours reads ~8% low), gate
+        tolerance 0.05%. Y unit = gap over its 63d std (guess; Trim/Hold
+        never seen publicly).
+      - [x] Dashboard DONE 2026-10-15: new nav group "🩺 Market Health" →
+        "🌱 Growth Cycle" (`ACTIVE_TAB == 'growth'`): zone banner, 4
+        metrics, X/Y zone map + path, ratio + band chart, zone strip
+        since 2022, zone stats, recent zone changes, "How it's built".
+      - [ ] Calibrate further with real screenshots (Y-axis σ unit, lower
+        line 0.35–0.6% off, a Probe / Trim / Hold day).
+- [x] test_dashboard_app.py crash in Patterns ("'AAPL' is not in list")
+      — FIXED 2026-10-15: stale `pt_chart_ticker` pick is dropped when it
+      isn't in the new result list; outdated "reset" check updated. 45/45.
 - [x] Second row of tabs — DONE 2026-10-13 (group row / tab row / Presets
       sub-row; `TAB_GROUPS` in dashboard.py).
 
@@ -194,3 +234,20 @@ useful → compute the signals daily and filter them in the Screener.
       the tab); --as-of runs compute them too (own `*_asof` caches), and
       history.db was backfilled 20 sessions so the history counts them on
       every day.
+
+## 10. Sustainability Ratio panels (Market Health) — v1 DONE 2026-10-15
+
+Replaces the CSV-driven PNGs of market_manipulation/market_charts (daily
+only, no tables). `src/sr_panels.py` + "⚖️ Sustainability Ratio" tab:
+layout = built-in preset (SPY + XLY/XLP, Sectors, the old ratio pairs) or
+my_layouts/*.json; panels edited in a table (Ticker / Ratio / Ratio no
+gaps), MAs EMA21/SMA50/SMA150/SMA200, range, log. `test_sr_panels.py`
+(gap adjust == market_charts loop).
+- [ ] Look check on the dark theme (line / MA colors, panel height).
+- [ ] Missing data: IGV, SOXX, SPYD (SPY:IGV, SPY:SOXX, SPYV:SPYD charts).
+- [x] 2026-10-15: one stacked figure (shared date axis, linked zoom, hover
+      line), fixed size 700 x 1100 px; builder (🛠 Build / edit layout):
+      rows Type + ticker pickers from the first 50 rows of
+      indexes_tickers.csv (config.SR_TICKER_LIST_N; row 50 = QQEW), ↑ ↓ ✕,
+      ＋ Add chart, Save (reruns + selects it), Delete own layouts.
+- [ ] Maybe: candlesticks (OHLC is there; ratio H/L = Ha/Hb approximation).
