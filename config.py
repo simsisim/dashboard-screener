@@ -21,7 +21,7 @@ DAILY_ARCHIVE = MARKET_DATA_DAILY / 'archive'      # 2020-01-02 -> 2025-12-31
 DAILY_CURRENT = MARKET_DATA_DAILY / 'current'      # 2026-01-02 -> today
 MARKET_DATA_BATCH_DAILY = DOWNLOAD_ROOT / 'data' / 'market_data_batch' / 'daily'
 MARKET_DATA_SHARES = DOWNLOAD_ROOT / 'data' / 'market_data' / 'shares_outstanding'
-FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_0_5.csv'  # refreshed daily (CLI_run.md)
+FIN_DATA_CSV = DOWNLOAD_ROOT / 'data' / 'fin_data' / 'financial_data_5_0.csv'  # refreshed daily (CLI_run.md)
 
 RESULTS_DIR = SCREENERS_ROOT / 'results'
 
