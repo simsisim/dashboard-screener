@@ -309,6 +309,14 @@ def _how_built(title: str, lines: list):
                         unsafe_allow_html=True)
 
 
+def _tv_txt_groups(frame, group_col: str) -> bytes:
+    """Same export as _tv_txt, with one ###section per `group_col` value."""
+    ex = None
+    if 'exchange' not in getattr(frame, 'columns', []):
+        ex = full['exchange'].reindex(frame.index).to_dict()
+    return dfil.tradingview_by_group(frame, group_col, exchanges=ex).encode()
+
+
 def _tv_txt(frame, section: str) -> bytes:
     """`frame` (indexed by ticker) -> TradingView “Upload list…” .txt bytes:
     EXCHANGE:SYMBOL, comma-separated, leading ###section divider. The exchange
@@ -321,6 +329,9 @@ def _tv_txt(frame, section: str) -> bytes:
     return dfil.tradingview_watchlist(frame, exchanges=ex, section=section).encode()
 
 
+_TV_GROUP_HELP = ('EXCHANGE:SYMBOL, one section per industry (or the list’s '
+                  'theme), largest first — paste-ready for TradingView '
+                  '“Upload list…”.')
 _TV_HELP = ('EXCHANGE:SYMBOL, comma-separated — paste-ready for TradingView '
             '“Upload list…”. Split by hand if over 1000 names.')
 
@@ -2049,6 +2060,9 @@ if ACTIVE_TAB == 'leadermap':
             'weakness = the top of the 21dma-structure (21 EMA of the highs), '
             'i.e. wait for the pullback. <b>Stop</b> = the bottom of the box. '
             f'<b>Target</b> = entry + {config.LMAP_SETUP_R:g} × (entry − stop). '
+            '<b>Under the name</b>: its industry (or list theme), then the leader '
+            f'screens it passes in this run — {", ".join(t for t, _c in leader_map.REASON_FLAGS)}, '
+            f'RS = RS percentile ≥ {leader_map.REASON_RS_MIN}. '
             'Checked against the 9/28 Prime Report (validate.py #18). Alex’s own '
             'checklist / theme picks and the “tight / higher lows / volume dry” '
             'tags are not modelled.', unsafe_allow_html=True)
@@ -2060,7 +2074,7 @@ if ACTIVE_TAB == 'leadermap':
                                    key='lm_setups_png')
             _cols = ['role', 'x', 'close', 'buy_lo', 'buy_hi', 'entry', 'stop',
                      'stop_pct', 'target', 'target_pct', 'in_band_30',
-                     'travel_min', 'travel_max', 'x_30_ago', 'group', 'rs_pct',
+                     'travel_min', 'travel_max', 'x_30_ago', 'group', 'reasons', 'rs_pct',
                      'list_rank']
             st.dataframe(_sets[[c for c in _cols if c in _sets]],
                          use_container_width=True,
@@ -2069,9 +2083,9 @@ if ACTIVE_TAB == 'leadermap':
             s1.download_button('Download setups CSV', scsv_p.read_bytes(),
                                file_name=scsv_p.name, key='lm_setups_csv')
             s2.download_button('⭳ TradingView .txt (setups)',
-                               _tv_txt(_sets, f'Setups — {src_name}'),
+                               _tv_txt_groups(_sets, 'group'),
                                file_name=f'leader_setups_{_slug}.txt',
-                               mime='text/plain', help=_TV_HELP,
+                               mime='text/plain', help=_TV_GROUP_HELP,
                                key='lm_setups_tv')
         else:
             st.caption('No name in the buy area or on weakness today.')
@@ -2112,9 +2126,9 @@ if ACTIVE_TAB == 'leadermap':
                            file_name=csv_p.name)
         _buy = tbl[tbl['state'] == 'buy']
         d2.download_button('⭳ TradingView .txt (buy area)',
-                           _tv_txt(_buy, f'Buy area — {src_name}'),
+                           _tv_txt_groups(_buy, 'group') if len(_buy) else b'',
                            file_name=f'leader_map_buy_{_slug}.txt',
-                           mime='text/plain', help=_TV_HELP,
+                           mime='text/plain', help=_TV_GROUP_HELP,
                            disabled=not len(_buy))
     else:
         st.info('Pick a list file (or upload one) to draw the map.')

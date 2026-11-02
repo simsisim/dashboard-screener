@@ -822,6 +822,23 @@ def tradingview_watchlist(tickers, exchanges=None, section=None) -> str:
     return ','.join(toks) + '\n'
 
 
+def tradingview_by_group(frame, group_col: str, exchanges=None,
+                         other: str = 'Other') -> str:
+    """`frame` (indexed by ticker) -> TradingView `.txt` with one ``###section``
+    per `group_col` value: largest group first (ties A-Z), names keep the
+    frame's order inside a group; a blank group goes last under `other`.
+    Commas are stripped from section names: a comma separates tokens here."""
+    labels = (frame[group_col].astype(object).where(frame[group_col].notna(), '')
+              .map(lambda v: str(v).replace(',', ' ').strip()))
+    sizes = labels.value_counts()
+    order = sorted((g for g in sizes.index if g),
+                   key=lambda g: (-sizes[g], g.lower()))
+    parts = [tradingview_watchlist(frame[labels == g], exchanges=exchanges,
+                                   section=g or other).strip()
+             for g in order + ([''] if '' in sizes.index else [])]
+    return ','.join(parts) + '\n'
+
+
 # ---------------------------------------------------- workflow store -------
 # Built-ins (config.WORKFLOWS) are read-only; user copies are JSON in
 # my_workflows/. Same pattern as save_screener / saved_screeners / ...

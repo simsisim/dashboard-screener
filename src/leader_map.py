@@ -44,6 +44,27 @@ INK, INK_2, INK_3 = '#0b0b0b', '#52514e', '#8a8984'
 SURFACE = '#fcfcfb'
 
 
+# Why a name is a leader: short tag -> the screener_results.csv test it passes.
+# List files only hold tickers, so this is read from today's run.
+REASON_FLAGS = [('Min', 'in_minervini'), ('SCTR', 'in_scooter'),
+                ('CANSLIM', 'in_canslim'), ('Cantata', 'in_cantata'),
+                ('Qulla', 'in_qullamaggie'), ('GLP', 'in_gold_launch_pad')]
+REASON_RS_MIN = 90      # same bar as the Confluence RS90 badge
+
+
+def reasons(r) -> str:
+    """Screener row -> 'Min RS SCTR ...': the leader screens it passes today.
+    Empty for a list name outside the universe (no screener columns)."""
+    def yes(col):
+        v = r.get(col)
+        return pd.notna(v) and bool(v)
+    tags = [tag for tag, col in REASON_FLAGS if yes(col)]
+    rs = pd.to_numeric(r.get('rs_pct'), errors='coerce')
+    if pd.notna(rs) and rs >= REASON_RS_MIN:
+        tags.insert(1 if 'Min' in tags else 0, 'RS')
+    return ' '.join(tags)
+
+
 def parse_tickers(text: str) -> list:
     """Tickers from a list file, in file order, deduplicated. Accepts the
     TradingView "Upload list" .txt (EXCHANGE:SYMBOL, ###section headers),
@@ -162,7 +183,8 @@ def build_setups(pos: pd.DataFrame) -> pd.DataFrame:
         inb = ((last30 >= band_lo) & (last30 <= band_hi)).astype(int)
         rows.append({
             'ticker': t, 'role': r['role'], 'list_rank': r['list_rank'],
-            'group': r['group'], 'rs_pct': r.get('rs_pct'),
+            'group': r['group'], 'reasons': r.get('reasons'),
+            'rs_pct': r.get('rs_pct'),
             'x': round(s.iloc[-1], 2), 'close': round(close, 2),
             'buy_lo': round(stop, 2), 'buy_hi': round(e + band_hi * a, 2),
             'entry': round(entry, 2), 'x_entry': round((entry - e) / a, 2),
@@ -222,7 +244,8 @@ def build(full: pd.DataFrame, tickers: list, themes: dict | None = None,
                      'y_weekly10_atr': y, 'state': classify(x, y),
                      'group': (themes or {}).get(t) or r.get('industry'),
                      'close': r.get('close'), 'rs_pct': r.get('rs_pct'),
-                     'sector': r.get('sector'), 'industry': r.get('industry')})
+                     'sector': r.get('sector'), 'industry': r.get('industry'),
+                     'reasons': reasons(r)})
     df = pd.DataFrame(rows).set_index('ticker') if rows else pd.DataFrame(
         columns=['list_rank', 'x_daily21_atr', 'y_weekly10_atr', 'state', 'group'])
     return df, missing
@@ -432,11 +455,14 @@ def plot_setups(st: pd.DataFrame, title: str, subtitle: str, path: Path):
         t, r = payload
         col = ROLE_COLOR[role]
         verb = 'buy' if role == 'buy' else 'wait for'
-        # left: ticker + group
+        # left: ticker + group + why it is a leader
         ax.text(-0.005, yy + 0.12, t, transform=lx, ha='right', va='center',
                 fontsize=10, fontweight='bold', color=INK, family='monospace')
         ax.text(-0.005, yy - 0.28, str(r['group'])[:30], transform=lx, ha='right',
                 va='center', fontsize=7, color=INK_2)
+        if isinstance(r.get('reasons'), str) and r['reasons']:
+            ax.text(-0.005, yy - 0.62, r['reasons'], transform=lx, ha='right',
+                    va='center', fontsize=6.5, color=INK)
         # buy range above the bar
         ax.text((lo + hi) / 2, yy + 0.42, f"{verb} {r['buy_lo']:,.2f} – {r['buy_hi']:,.2f}",
                 ha='center', va='center', fontsize=7.5, fontweight='bold',
