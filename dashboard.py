@@ -32,6 +32,7 @@ from src.focus import volume_records  # noqa: E402
 from src import leader_map  # noqa: E402
 from src.history_db import HistoryDB, repeat_table  # noqa: E402
 from src import ticker_summary  # noqa: E402
+from src import earnings_window  # noqa: E402
 
 st.set_page_config(page_title='Dashboard Screener',
                    layout='wide')
@@ -55,7 +56,7 @@ def load_tables(run: Path):
     focus = pd.read_csv(run / 'focus_list.csv', index_col='ticker') \
         if (run / 'focus_list.csv').exists() else pd.DataFrame()
     leaders = {}
-    for name in ('minervini', 'canslim', 'scooter', 'all'):
+    for name in ('minervini', 'canslim', 'scooter', 'cantata', 'all'):
         p = run / f'leaders_{name}.csv'
         if p.exists():
             df = pd.read_csv(p, index_col='ticker')
@@ -141,6 +142,7 @@ TABS = {
     'leaders': '🏆 Leaders’ Lists',
     'all': '🔎 Screener',
     'volume': '🔊 Volume Records',
+    'earnmoves': '💥 Earnings Moves',
     'movers': '📈 Top Movers',
     'focus': '🎯 Focus List',
     'confluence': '🎖️ Confluence',
@@ -164,6 +166,7 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
                'wf_edit_btn', 'wf_new_btn', 'wf_del_btn', 'del_screener',
                'cf_save_sel', 'cf_save_top', 'cfh_save_list', 'pt_save_list',
                'vr_save_list', 'vr_reset', 'vrd_peb', 'vrd_reset_btn',
+               'emt_reset_btn', 'emt_freset', 'emt_save_list',
                'mv_save_list', 'lm_run', 'lm_upload',
                'save_upload', 'del_list', 'wf_add_stage', 'wf_save_btn',
                'wf_discard', 'wf_focus_save', 'wf_focus_csv', 'wf_focus_tv',
@@ -171,7 +174,7 @@ _NO_PERSIST = {'results_sel', 'cf_sel', 'comb_clear', 'comb2_clear',
 _NO_PERSIST_PREFIX = ('FormSubmitter:', 'wf_up_', 'wf_dn_', 'wf_edit_',
                       'wf_dupe_', 'wf_dropstg_', 'lead_tv_', 'wf_stage_csv_',
                       'wf_stage_tv_', 'lm_setups_', 'sr_up', 'sr_dn',
-                      'sr_rm')
+                      'sr_rm', 'emt_p_')
 for _k in list(st.session_state.keys()):
     if _k not in _NO_PERSIST and not _k.startswith(_NO_PERSIST_PREFIX):
         st.session_state[_k] = st.session_state[_k]
@@ -182,7 +185,7 @@ for _k in list(st.session_state.keys()):
 # the rows follow it, and each group / sub-row reopens its last-used tab.
 TAB_GROUPS = {
     '🔎 Screen': ['all', 'confluence', 'workflows', 'presets'],
-    '📡 Signals': ['volume', 'patterns'],
+    '📡 Signals': ['volume', 'earnmoves', 'patterns'],
     '🌍 Market Movers': ['movers'],
     '🩺 Market Health': ['growth', 'sr'],
     '📋 Ticker': ['detail', 'leadermap'],
@@ -256,6 +259,74 @@ def _spark_closes(symbol: str, run_name: str):
                 except Exception:
                     return None
     return None
+
+
+@st.cache_data(ttl=600)
+def _fin_table() -> pd.DataFrame:
+    """Fundamentals snapshot (earnings dates / results) for the summary."""
+    try:
+        return data_loader.load_financial_data()
+    except OSError:
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _daily_bars(symbol: str, run_name: str):
+    """Full daily OHLCV for one ticker (run_name = cache key, see above)."""
+    return data_loader.load_daily(symbol)
+
+
+def _er_section(ticker: str, key: str):
+    """Around-earnings chart (src/earnings_window.py) with its controls:
+    which report, how many quarters back to average, start day."""
+    _fin = _fin_table()
+    daily = _daily_bars(ticker, run.name)
+    reports = earnings_window.report_dates(
+        _fin.loc[ticker] if ticker in _fin.index else None)
+    av = (earnings_window.available(daily, reports)
+          if daily is not None and len(daily) else [])
+    if not av:
+        st.caption(f'{ticker}: no report dates with price data around them')
+        return
+    _b = config.ER_WINDOW_BEFORE
+    c1, c2, c3 = st.columns([2, 2, 3])
+    which = c1.selectbox(
+        'Report', range(len(av)), key=f'{key}_rep_{ticker}',
+        format_func=lambda i: (f'{av[i][0]:%Y-%m-%d}'
+                               + (' (upcoming)' if av[i][0] > daily.index[-1]
+                                  else ' (latest)' if i == 0 else '')))
+    n_avg = c2.selectbox('Average from last', [0, 1, 2, 4, 8, 12],
+                         index=3, key=f'{key}_navg',
+                         format_func=lambda n: 'none' if n == 0 else
+                         f'{n} quarter{"s" if n > 1 else ""}',
+                         help='reports before the selected one; only those '
+                         'with a full window of bars count')
+    anchor = c3.slider('Measure from day', -_b, 0, -_b, key=f'{key}_anchor',
+                       help='every line = % change from this day\'s close; '
+                       '-1 = the close before the report (shows the gap)')
+    data = earnings_window.build(daily, reports, which, n_avg, anchor)
+    if data is None:
+        st.caption('the start day has not traded yet — pick an earlier day')
+        return
+    try:
+        hve = volume_records.ticker_ladder(ticker)['date']
+    except OSError:
+        hve = ()
+    cur = data['current']['pct'].dropna()
+    _avg = (f' · average of {data["n_used"]} quarter'
+            f'{"s" if data["n_used"] != 1 else ""} '
+            f'{data["avg"].reindex(cur.index).iloc[-1]:+.1f}%'
+            if data['n_used'] else '')
+    st.altair_chart(earnings_window.chart(
+        data, earnings_window.record_days(daily, hve),
+        f'{ticker} — around the {data["report"]:%Y-%m-%d} report: '
+        f'day {int(cur.index[-1]):+d} {cur.iloc[-1]:+.1f}%{_avg}'),
+        use_container_width=False)
+    st.caption('Solid = this report (green/red = above/below the start), '
+               'dotted = average path of earlier reports, ▲ = HVE/HV1Y '
+               'record day. Day 0 = report session; after-close reports move '
+               'on day +1. Dates from financial_data_0_5.csv (qh*_date, '
+               'next_earnings_date)')
 
 
 def _universe_line() -> str:
@@ -1509,15 +1580,63 @@ if ACTIVE_TAB == 'movers':
 # PrimeTrading Lab Report "Growth Cycle": growth / value (IWF / IWD) risk
 # gate x momentum -> six zones (src/growth_cycle.py, TODO.md §6). Computed
 # on load (~0.5 s, 3 tickers), cached per IWF file version.
-GC_COLORS = {'Risk-off': '#e07a7a', 'Probe': '#d9b86c', 'Ramp Up': '#4caf50',
-             'Trim': '#2f6fd6', 'Hold': '#8fa6bf', 'Reload': '#7f9c7a'}
-GC_ACTION = {'Risk-off': 'Defensive — build the watchlist',
-             'Probe': 'Growth improving, gate not reclaimed — test small',
-             'Ramp Up': 'Fresh risk-on, momentum rising — build into leaders',
-             'Trim': 'Strong but stretched — harvest, don’t chase',
-             'Hold': 'Extended but digesting — let winners work, no new size',
-             'Reload': 'Pullback inside risk-on — leaders back to support '
-                       '(watch for a failed reload)'}
+GC_COLORS = {'Risk-off': '#c0453b', 'Probe': '#d39b22', 'Ramp Up': '#1f8a5b',
+             'Trim': '#6b5b9a', 'Hold': '#2f7f9c', 'Reload': '#7fb48f'}
+# His wording (Lab Report zone cards). "The test" = his own backtest; our
+# figures for the same zones sit under each card.
+GC_ACTION = {'Risk-off': 'Money in value. Growth light or cash, build the watchlist.',
+             'Probe': 'Growth turning up under the 10w structure. Coin flip in '
+                      'the test: probe size only, wait for the close above the '
+                      'structure.',
+             'Ramp Up': 'Fresh risk-on. Best zone in the test: add size in '
+                        'growth leaders.',
+             'Trim': 'Stretched on both. Take partial profits into strength, '
+                     'no new size, wait for a Reload.',
+             'Hold': 'Extended but digesting. Hold winners, trail stops, add '
+                     'only on a proper setup.',
+             'Reload': 'Pullback inside risk-on. Buy leaders at support, keep '
+                       'stops tight: this is also where it rolls over.'}
+GC_ZONE_RULE = {'Risk-off': 'Risk-off · momentum falling',
+                'Probe': 'Risk-off · momentum rising',
+                'Ramp Up': 'Risk-on · momentum rising',
+                'Reload': 'Risk-on · momentum fading',
+                'Hold': 'Extended · 10w structure only, 21-day EMA cooled',
+                'Trim': 'Extended · 10w structure and 21-day EMA'}
+GC_CARD_ORDER = ('Risk-off', 'Probe', 'Ramp Up', 'Trim', 'Hold', 'Reload')
+
+
+def _gc_reading_card(title: str, value: str, note: str, color: str) -> str:
+    """Right-column reading: label, big value, one line of detail."""
+    return (f'<div style="border:1px solid rgba(128,128,128,.35);border-top:3px '
+            f'solid {color};border-radius:0.4rem;padding:0.5rem 0.8rem;'
+            f'margin-bottom:0.5rem"><div style="font-size:0.8rem;opacity:.7">'
+            f'{title}</div><div style="font-family:monospace;font-weight:700;'
+            f'font-size:1.05rem">{value}</div><div style="font-size:0.8rem;'
+            f'opacity:.7">{note}</div></div>')
+
+
+def _gc_zone_card(zone: str, row, active: bool) -> str:
+    """Definition + what happened next, for one zone."""
+    c = GC_COLORS[zone]
+    tint = f'background:{c}22;border:1px solid {c};' if active \
+        else 'border:1px solid rgba(128,128,128,.35);'
+    up = 0 if pd.isna(row.up_pct) else row.up_pct
+    return (f'<div style="{tint}border-top:3px solid {c};border-radius:0.4rem;'
+            f'padding:0.5rem 0.7rem;height:100%;display:flex;flex-direction:column;'
+            f'justify-content:space-between"><div>'
+            f'<div style="display:flex;justify-content:space-between">'
+            f'<b style="color:{c}">{zone.upper()}</b><span style="font-size:0.75rem;'
+            f'opacity:.7">{row.days} days</span></div>'
+            f'<div style="font-size:0.82rem;margin:0.2rem 0 0.5rem">{GC_ACTION[zone]}'
+            f'</div></div><div><div style="display:flex;justify-content:space-between;'
+            f'font-size:0.75rem"><span style="opacity:.7">{config.GC_STATS_TICKER} '
+            f'next {config.GC_STATS_FWD} days</span><b>{row.avg_move_pct:+.1f}%</b>'
+            f'</div><div style="background:rgba(128,128,128,.2);height:4px;'
+            f'border-radius:2px;margin:0.2rem 0"><div style="background:{c};'
+            f'height:4px;border-radius:2px;width:{up:.0f}%"></div></div>'
+            f'<div style="display:flex;justify-content:space-between;font-size:0.72rem;'
+            f'opacity:.7"><span>up {row.up_pct:.0f}% of the time</span>'
+            f'<span>growth won {row.growth_won_pct:.0f}%</span></div></div></div>')
 
 
 @st.cache_data(show_spinner=False)
@@ -1526,35 +1645,436 @@ def _gc_model(_version: float):
     data = growth_cycle.load_inputs()
     model = growth_cycle.compute(growth_cycle.ratio_bars(data))
     stats = growth_cycle.zone_stats(model, data['close'][config.GC_STATS_TICKER],
-                                    config.GC_HISTORY_START)
+                                    config.GC_HISTORY_SESSIONS)
     return model, stats, growth_cycle.zone_episodes(model)
 
 
+# ------------------------------------------------------ Reversal Odds -----
+# PrimeTrading Lab Report board on QQQ (src/reversal_odds.py,
+# docs/reversal_odds_plan.md). Second view of the Growth Cycle tab.
+REV_COLORS = {'Reversal': '#1f8a5b', 'Probe': '#d39b22', 'Extended': '#8370ba',
+              'Trend': '#7c8a8f', 'Risk-off': '#c0453b'}
+REV_TEXT = {
+    'Reversal': 'The 50-day is above the 200-day and price has stretched far '
+                'enough below its own 21-day to matter. This is the flag.',
+    'Probe': 'The same stretch with the 50-day below the 200-day. Early more '
+             'often than not, so probe small. Not a bottom call.',
+    'Extended': 'The 50-day is above the 200-day and price is stretched far '
+                'above its 21-day.',
+    'Trend': 'The 50-day is above the 200-day and nothing is stretched. '
+             'Nothing to do here.',
+    'Risk-off': 'The 50-day is below the 200-day and nothing is stretched. A '
+                'decline from here is a correction.'}
+
+
+@st.cache_data(show_spinner=False)
+def _rev_model(_version: float):
+    from src import reversal_odds
+    bars, full = reversal_odds.load_bars()
+    model = reversal_odds.compute(bars)
+    flags, base = reversal_odds.flag_stats(model)
+    return model, flags, base, reversal_odds.regime_stats(model), full
+
+
+def _rev_ord(v: float) -> str:
+    n = int(round(v))
+    suf = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f'{n}{suf}'
+
+
+def _rev_track(value: float, lim: float, ticks: list, ends: tuple, color: str,
+               tint: float | None = None) -> str:
+    """Horizontal gauge from -lim to +lim: value + pointer above, tick labels and
+    end labels below. `tint` shades past +-tint (the flag cuts)."""
+    pos = lambda v: (min(max(v, -lim), lim) + lim) / (2 * lim) * 100
+    at = min(max(pos(value), 7), 93)    # keep the value label inside the card
+    fill = ''
+    if tint:
+        fill = (f'<div style="position:absolute;left:0;width:{pos(-tint):.1f}%;top:0;'
+                f'bottom:0;background:{REV_COLORS["Reversal"]}33"></div>'
+                f'<div style="position:absolute;left:{pos(tint):.1f}%;right:0;top:0;'
+                f'bottom:0;background:{REV_COLORS["Extended"]}33"></div>')
+    marks = labels = ''
+    for t in ticks:
+        c = (REV_COLORS['Reversal'] if t < 0 else REV_COLORS['Extended']) if tint \
+            else 'rgba(128,128,128,.55)'
+        marks += (f'<div style="position:absolute;left:{pos(t):.1f}%;top:0;bottom:0;'
+                  f'width:{2 if tint else 1}px;background:{c}"></div>')
+        labels += (f'<span style="position:absolute;left:{pos(t):.1f}%;'
+                   f'transform:translateX(-50%)">{t:+g}</span>' if t else
+                   f'<span style="position:absolute;left:{pos(t):.1f}%;'
+                   f'transform:translateX(-50%)">0</span>')
+    lc, rc = (REV_COLORS['Reversal'], REV_COLORS['Extended']) if tint else ('inherit', 'inherit')
+    return (f'<div style="position:relative;height:1.55rem;margin-top:0.35rem">'
+            f'<div style="position:absolute;left:{at:.1f}%;transform:translateX(-50%);'
+            f'text-align:center;line-height:1;font-family:monospace;font-weight:700;'
+            f'color:{color};white-space:nowrap">{value:+.2f}σ<div style="font-size:0.7rem;'
+            f'margin-top:1px">▼</div></div></div>'
+            f'<div style="position:relative;height:16px;background:rgba(128,128,128,.16);'
+            f'border-radius:3px;overflow:hidden">{fill}{marks}</div>'
+            f'<div style="position:relative;height:1.05rem;font-size:0.7rem;opacity:.7;'
+            f'margin-top:2px">{labels}</div>'
+            f'<div style="display:flex;justify-content:space-between;font-size:0.68rem;'
+            f'letter-spacing:.04em"><span style="color:{lc};opacity:.8">{ends[0]}</span>'
+            f'<span style="color:{rc};opacity:.8">{ends[1]}</span></div>')
+
+
+_REV_CARD = ('border:1px solid rgba(128,128,128,.35);border-radius:0.4rem;'
+             'padding:0.55rem 0.8rem;margin-bottom:0.5rem')
+_REV_NOTE = 'font-size:0.76rem;opacity:.7;margin-top:0.35rem'
+
+
+def _rev_daily_card(t) -> str:
+    cut = config.REV_CUT
+    return (f'<div style="{_REV_CARD}"><div style="font-size:0.72rem;opacity:.7;'
+            f'letter-spacing:.04em">WHERE THE DAILY SITS</div>'
+            + _rev_track(t.z, 3.0, [-cut, cut], ('REVERSAL', 'EXTENDED'),
+                         REV_COLORS.get(t.state, '#808080'), tint=cut)
+            + f'<div style="{_REV_NOTE}">Price against its {config.REV_EMA}-EMA, in ATR, '
+              f'scored on ten years of its own readings. <b>{_rev_ord(t.pct)} '
+              f'percentile</b> of that window.</div></div>')
+
+
+def _rev_regime_card(t) -> str:
+    side = 'above' if t.above else 'below'
+    kind = 'pullback' if t.above else 'correction'
+    col = '#7c8a8f' if t.above else REV_COLORS['Risk-off']
+    return (f'<div style="{_REV_CARD};border-top:3px solid {col}">'
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+            f'gap:0.6rem;flex-wrap:wrap"><span style="font-size:0.72rem;opacity:.7;'
+            f'letter-spacing:.04em">THE REGIME · 50-SMA vs 200-SMA</span>'
+            f'<b style="font-family:monospace;font-size:1.1rem">{t.regime_pct:+.1f}%</b>'
+            f'<span style="font-size:0.78rem;opacity:.8">50-day <b>{side}</b>: a decline '
+            f'from here is a {kind}, day {t.regime_day}</span></div>'
+            + _rev_track(t.z_w, 2.5, [-2, -1, 0, 1, 2], ('STRETCHED DOWN', 'STRETCHED UP'),
+                         '#8a63c9')
+            + f'<div style="{_REV_NOTE}">The gauge is the same stretch on <b>weekly</b> bars, '
+              f'against the {config.REV_WEEKLY_EMA}-week: <b>{_rev_ord(t.pct_w)} percentile'
+              f'</b> of its own ten years. Context only, never a condition; the regime is '
+              f'the 50 / 200 cross above.</div></div>')
+
+
+def _rev_here(on: bool) -> str:
+    return ('<div style="font-size:0.62rem;font-weight:700;letter-spacing:.05em">'
+            'YOU ARE HERE</div>' if on else '')
+
+
+def _rev_meaning(flags: pd.DataFrame, base: dict, regimes: pd.DataFrame, t) -> str:
+    """What each state has meant, as bars: forward returns per flag (20d pale
+    inside 60d solid, on one zero line), up % against the all-sessions rate, and
+    the return earned inside each regime."""
+    fmt = lambda v, f: '–' if pd.isna(v) else format(v, f)
+    moves = [abs(v) for v in flags[['fwd20', 'fwd60']].values.ravel() if not pd.isna(v)]
+    top = max(moves + [1.0])
+    neg = max([-v for v in flags[['fwd20', 'fwd60']].values.ravel()
+               if not pd.isna(v) and v < 0] + [0.0])
+    span = top + neg
+    zero = neg / span * 100
+    def bar(v, inner, c):
+        if pd.isna(v):
+            return ''
+        w, left = abs(v) / span * 100, zero if v >= 0 else zero - abs(v) / span * 100
+        paint = (f'background:linear-gradient(rgba(255,255,255,.55),rgba(255,255,255,.55)),{c}'
+                 if inner else f'background:{c}')
+        tb = 'top:28%;bottom:28%' if inner else 'top:0;bottom:0'
+        return f'<div style="position:absolute;left:{left:.1f}%;width:{w:.1f}%;{tb};{paint}"></div>'
+    grid = ('display:grid;grid-template-columns:5.2rem 1.7rem minmax(40px,1fr) 7.1rem 4.6rem;'
+            'column-gap:0.45rem;align-items:center')
+    head = ('font-size:0.66rem;letter-spacing:.04em;opacity:.7')
+    html = (f'<div style="{_REV_CARD}"><div style="font-weight:700;margin-bottom:0.15rem">'
+            f'What each state has meant</div><div style="font-size:0.76rem;opacity:.7;'
+            f'margin-bottom:0.5rem">A flag is an event and a regime is a condition, so they '
+            f'are measured differently. Every session since {config.REV_STATS_START[:4]} '
+            f'averaged <b>{base["fwd20"]:+.2f}%</b> over 20 days and <b>{base["fwd60"]:+.2f}%'
+            f'</b> over 60, up {base["up20"]:.0f}% and {base["up60"]:.0f}% of the time: that '
+            f'is the bar a flag has to clear.</div>'
+            f'<div style="{head};margin-bottom:0.2rem"><b>FLAGS</b> · measured on the first '
+            f'day each one fires</div><div style="{grid};{head};margin-bottom:0.15rem">'
+            f'<span></span><span style="text-align:right">N</span><span>FORWARD RETURN · '
+            f'<span style="opacity:.65">20d</span> / <b>60d</b></span><span></span>'
+            f'<span style="text-align:right">UP AT 20d</span></div>')
+    for name, r in flags.iterrows():
+        c = REV_COLORS[name]
+        here = name == t.state
+        up = 0 if pd.isna(r.up20) else r.up20
+        html += (
+            f'<div style="{grid};background:{c}1f;padding:0.32rem 0.3rem;margin-bottom:2px;'
+            f'border-left:3px solid {"currentColor" if here else "transparent"}">'
+            f'<div style="font-weight:600;color:{c};font-size:0.84rem">{name}{_rev_here(here)}</div>'
+            f'<div style="text-align:right;font-size:0.8rem;opacity:.75">{int(r.n)}</div>'
+            f'<div style="position:relative;height:20px">{bar(r.fwd60, False, c)}'
+            f'{bar(r.fwd20, True, c)}<div style="position:absolute;left:{zero:.1f}%;top:-2px;'
+            f'bottom:-2px;width:1px;background:currentColor;opacity:.6"></div></div>'
+            f'<div style="text-align:right;font-family:monospace;font-size:0.78rem;'
+            f'white-space:nowrap"><span style="opacity:.65">{fmt(r.fwd20, "+.2f")}%</span> '
+            f'<b>{fmt(r.fwd60, "+.2f")}%</b></div>'
+            f'<div style="display:flex;align-items:center;gap:0.25rem"><div style="position:'
+            f'relative;flex:1;height:5px;background:rgba(128,128,128,.22);border-radius:3px">'
+            f'<div style="height:5px;width:{up:.0f}%;background:{c};border-radius:3px"></div>'
+            f'<div title="all sessions" style="position:absolute;left:{base["up20"]:.0f}%;'
+            f'top:-3px;bottom:-3px;width:1.5px;background:currentColor"></div></div>'
+            f'<span style="font-size:0.74rem">{fmt(r.up20, ".0f")}%</span></div></div>')
+    grid2 = ('display:grid;grid-template-columns:6.2rem 4.4rem minmax(40px,1fr) 6rem 3.2rem;'
+             'column-gap:0.45rem;align-items:center')
+    best = max([v for v in regimes.cagr if not pd.isna(v) and v > 0] + [1.0])
+    html += (f'<div style="{head};margin:0.6rem 0 0.2rem"><b>REGIME</b> · measured on every '
+             f'day you sit inside it</div><div style="{grid2};{head};margin-bottom:0.15rem">'
+             f'<span></span><span style="text-align:right">SESSIONS</span><span>RETURN EARNED '
+             f'WHILE IN IT</span><span style="text-align:right">CAGR / VOL</span>'
+             f'<span style="text-align:right;white-space:nowrap">MAX DD</span></div>')
+    for name, r in regimes.iterrows():
+        above = name == '50 above 200'
+        c = '#7c8a8f' if above else REV_COLORS['Risk-off']
+        here = above == bool(t.above)
+        w = max(r.cagr, 0) / best * 100 if not pd.isna(r.cagr) else 0
+        html += (
+            f'<div style="{grid2};background:{c}1f;padding:0.32rem 0.3rem;margin-bottom:2px;'
+            f'border-left:3px solid {"currentColor" if here else "transparent"}">'
+            f'<div style="font-weight:600;color:{c};font-size:0.84rem">{name}{_rev_here(here)}</div>'
+            f'<div style="text-align:right;font-size:0.76rem;line-height:1.15">{int(r.sessions)}'
+            f'<div style="font-size:0.66rem;opacity:.7;white-space:nowrap">{r.share:.0f}% of days</div></div>'
+            f'<div style="height:20px"><div style="height:20px;width:{w:.1f}%;background:{c}">'
+            f'</div></div><div style="text-align:right;font-family:monospace;font-size:0.78rem;'
+            f'white-space:nowrap"><b>{fmt(r.cagr, ".1f")}%</b> <span style="opacity:.65">'
+            f'{fmt(r.vol, ".0f")}% vol</span></div><div style="text-align:right;font-family:'
+            f'monospace;font-size:0.78rem">{fmt(r.max_dd, ".0f")}%</div></div>')
+    return html + '</div>'
+
+
+# ------------------------------------------------------ Earnings Moves ---
+# Strong moves on a report day (em_*) or any big-volume gap (sb_*, metaVolume
+# shock bar), computed in the daily run by src/focus/earnings_moves.py.
+# Presets: Power Earnings Gap, Episodic Pivot, Earnings PVB (TODO.md §11).
+EM_SOURCES = {'Earnings (report day)': 'em', 'Any gap (shock bar)': 'sb'}
+EM_LABELS = {'date': 'day', 'bars_since': 'days ago', 'gap_pct': 'gap %',
+             'day_pct': 'day %', 'vol_x': 'vol × avg',
+             'close_str_pct': 'close strength %', 'gap_held': 'gap held',
+             'low_held': 'stop held', 'since_pct': 'since %', 'pvb': 'PVB',
+             'vol_record': 'vol record', 'report_date': 'report',
+             'day': 'day 0/+1'}
+_EM_DEFAULTS = {'emt_src': 'Earnings (report day)', 'emt_n': 20,
+                'emt_dir': 'Up', 'emt_gap': 0.0, 'emt_volx': 0.0,
+                'emt_str': 0, 'emt_gap_held': False, 'emt_low_held': False,
+                'emt_pvb': False, 'emt_rec': False}
+
+
+def _em_reset():
+    for k, v in _EM_DEFAULTS.items():
+        st.session_state[k] = v
+
+
+def _em_preset(**kw):
+    _em_reset()
+    st.session_state.update(kw)
+
+
+EM_PRESETS = {
+    '▶ Power Earnings Gap': (
+        dict(emt_gap=3.0, emt_volx=3.0, emt_str=50, emt_low_held=True),
+        'gap up ≥ 3% on the report, volume ≥ 3× average, closed in the top '
+        'half of the day, never traded below that day’s low since '
+        '(Morales & Kacher; our reading of their rules)'),
+    '▶ Episodic Pivot': (
+        dict(emt_gap=10.0, emt_volx=3.0),
+        'gap up ≥ 10% on the report with volume ≥ 3× average '
+        '(Pradeep Bonde / Stockbee)'),
+    '▶ Earnings PVB': (
+        dict(emt_pvb=True),
+        'the Price-Volume Breakout triggered on the reaction day'),
+    '▶ Shock bar': (
+        dict(emt_src='Any gap (shock bar)', emt_dir='Both'),
+        f'any day with volume ≥ {config.SB_VOL_MULT:g}× average and a gap '
+        f'≥ {config.SB_GAP_MIN_PCT:g}% either way — report or not '
+        '(metaVolume earnings_gap_study.py)'),
+}
+
+if ACTIVE_TAB == 'earnmoves':
+    _how_built('ℹ️ How Earnings Moves are built', [
+        _universe_line(),
+        '<b>Earnings (report day)</b>: report dates = qh*_date + '
+        'next_earnings_date from financial_data_0_5.csv. The file does not '
+        'say before-open / after-close, so the <b>reaction day</b> is the '
+        'report session or the one after, whichever traded more volume '
+        '(<b>day 0/+1</b>). Reports missing from the snapshot are not seen '
+        '— use <b>Any gap</b> for those',
+        f'<b>Any gap (shock bar)</b>: volume ≥ {config.SB_VOL_MULT:g}× the '
+        f'average of the {config.EM_AVG_VOL_BARS} bars before AND |gap| ≥ '
+        f'{config.SB_GAP_MIN_PCT:g}%, report or not (metaVolume '
+        '<code>earnings_gap_study.py</code>). <b>shocks</b> = how many in '
+        f'the last {config.EM_LOOKBACK_BARS} bars',
+        'One row per ticker: its latest event within the last N bars. '
+        '<b>gap %</b> = open vs the close before, <b>day %</b> = close vs '
+        f'the close before, <b>vol × avg</b> = volume / the {config.EM_AVG_VOL_BARS}'
+        '-bar average before it',
+        '<b>close strength %</b> = where the day closed in its range, in the '
+        'gap’s direction: 100 = at the high for a gap up, at the low for a '
+        'gap down. <b>gap held</b> = no price since crossed back over the '
+        'close before the gap. <b>stop held</b> = no low since below the '
+        'reaction day’s low (gap up) / no high above its high (gap down) — '
+        'the Power Earnings Gap stop. <b>since %</b> = today vs that day’s '
+        'close',
+        '<b>PVB</b> = the Price-Volume Breakout trigger on that day (close '
+        'beyond the prior 30-day high / low, volume above the prior 30-day '
+        'highest, close on the right side of the SMA50). <b>vol record</b> '
+        '= HVE (highest volume of the loaded history) or HV1Y that day',
+        'Presets fill the conditions; every value stays editable. '
+        '<b>Filters</b> = the Screener tab’s panel (own settings here)',
+    ])
+    if 'em_date' not in full:
+        st.warning('No Earnings Moves columns in this run yet — re-run '
+                   '`python3 run_screeners.py`.')
+        st.stop()
+    for _k, _v in {**_EM_DEFAULTS, 'emt_excl_funds': True}.items():
+        st.session_state.setdefault(_k, _v)
+
+    # ---- 1 Presets
+    st.markdown('**1&nbsp;&nbsp;Presets**')
+    with st.container(border=True):
+        _pc = st.columns(len(EM_PRESETS) + 1)
+        for _col, (_lbl, (_kw, _help)) in zip(_pc, EM_PRESETS.items()):
+            _col.button(_lbl, key=f'emt_p_{_lbl}', on_click=_em_preset,
+                        kwargs=_kw, help=_help, use_container_width=True)
+        _pc[-1].button('Reset', key='emt_reset_btn', on_click=_em_reset,
+                       use_container_width=True)
+
+    # ---- 2 Conditions
+    st.markdown('**2&nbsp;&nbsp;Conditions**')
+    with st.container(border=True):
+        a1, a2, a3 = st.columns([2, 1.3, 1])
+        a1.segmented_control('Event', list(EM_SOURCES), key='emt_src')
+        a2.segmented_control('Direction (gap)', ['Up', 'Down', 'Both'],
+                             key='emt_dir')
+        a3.number_input('Within the last N bars', 1, config.EM_LOOKBACK_BARS,
+                        key='emt_n', help='1 = the latest bar only')
+        b1, b2, b3 = st.columns(3)
+        b1.number_input('Gap ≥ (%)', 0.0, 100.0, step=1.0, key='emt_gap',
+                        help='size of the gap in the chosen direction; 0 = off')
+        b2.number_input('Volume ≥ × average', 0.0, 50.0, step=0.5,
+                        key='emt_volx', help='0 = off')
+        b3.slider('Close strength ≥ (%)', 0, 100, step=5, key='emt_str',
+                  help='50 = closed in the top half (gap up) / bottom half '
+                       '(gap down); 0 = off')
+        c1, c2, c3, c4 = st.columns(4)
+        c1.checkbox('Gap held', key='emt_gap_held')
+        c2.checkbox('Stop held (day’s low)', key='emt_low_held')
+        c3.checkbox('PVB on that day', key='emt_pvb')
+        c4.checkbox('HVE / HV1Y on that day', key='emt_rec')
+
+    # ---- 3 Filters — the Screener's panel, own state (keys 'emf_…')
+    _init_filter_state('emf_')
+    st.markdown('**3&nbsp;&nbsp;Filters**')
+    with st.container(border=True):
+        f1, f2 = st.columns([1, 1])
+        f1.checkbox('Exclude funds (Investment trusts)', key='emt_excl_funds')
+        f2.button('Reset Filters', key='emt_freset', on_click=_reset_panel,
+                  args=('emf_',))
+        _filter_grid('emf_')
+        _advanced_filters('emf_')
+
+    ss = st.session_state
+    _px = EM_SOURCES.get(ss['emt_src'] or 'Earnings (report day)', 'em')
+    _dir = ss['emt_dir'] or 'Both'
+    em_n = int(ss['emt_n'])
+    g = full[f'{_px}_gap_pct']
+    keep = full[f'{_px}_bars_since'] < em_n
+    if _dir == 'Up':
+        keep &= g >= 0
+    elif _dir == 'Down':
+        keep &= g < 0
+    if ss['emt_gap']:
+        keep &= g.abs() >= ss['emt_gap']
+    if ss['emt_volx']:
+        keep &= full[f'{_px}_vol_x'] >= ss['emt_volx']
+    if ss['emt_str']:
+        keep &= full[f'{_px}_close_str_pct'] >= ss['emt_str']
+    for _flag, _c in (('emt_gap_held', 'gap_held'), ('emt_low_held', 'low_held'),
+                      ('emt_pvb', 'pvb')):
+        if ss[_flag]:
+            keep &= full[f'{_px}_{_c}'].astype('boolean').fillna(False)
+    if ss['emt_rec']:
+        keep &= full[f'{_px}_vol_record'].fillna('').astype(str) != ''
+    if ss['emt_excl_funds'] and 'industry' in full:
+        keep &= full['industry'] != 'Investment trusts'
+    keep = keep.fillna(False).astype(bool) & _panel_mask(full, 'emf_')
+
+    _ev = [c for c in full.columns if c.startswith(f'{_px}_')]
+    ctx_cols = ['close', 'gain_5d', 'gain_1m', 'stage', 'rs_pct',
+                'ext_21ema_atr', 'adr20_pct', 'adv50_dollar', 'market_cap',
+                'sector', 'industry', 'exchange']
+    tbl = (full.loc[keep, _ev + [c for c in ctx_cols if c in full.columns]]
+           .sort_values([f'{_px}_bars_since', f'{_px}_gap_pct'],
+                        ascending=[True, _dir == 'Down']))
+    st.caption(f'{len(tbl):,} tickers — {ss["emt_src"]}, {_dir.lower()}, '
+               f'last {em_n} bars (run {run.name})')
+    if len(tbl):
+        show = tbl.copy()
+        show.index.name = 'ticker'
+        if len(show) <= 200:
+            show.insert(0, 'spark',
+                        [_spark_closes(t, run.name) for t in show.index])
+        _cfg = {'spark': st.column_config.LineChartColumn('120d', width=170)}
+        for _c in _ev:
+            _m = _c[len(_px) + 1:]
+            _lbl = EM_LABELS.get(_m, 'shocks' if _m == 'count' else _m)
+            _cfg[_c] = (st.column_config.NumberColumn(_lbl, format='%.2f')
+                        if _m.endswith(('_pct', 'vol_x'))
+                        else st.column_config.Column(_lbl))
+        st.dataframe(show, use_container_width=True,
+                     height=min(120 + 35 * len(show), 700), column_config=_cfg)
+        st.caption('One ticker’s full picture: 📋 Ticker → Around earnings')
+        _tag = f'{_px}_{_dir.lower()}_last{em_n}'
+        d1, d2, _d3 = st.columns([1, 1, 3])
+        d1.download_button('Download CSV', tbl.to_csv().encode(),
+                           file_name=f'earnmoves_{_tag}_{run.name}.csv')
+        d1.download_button('⭳ TradingView .txt',
+                           _tv_txt(tbl, f'Earnings Moves {_tag}'),
+                           file_name=f'earnmoves_{_tag}_{run.name}.txt',
+                           mime='text/plain', help=_TV_HELP)
+        em_ln = d2.text_input('List name', key='emt_list_name',
+                              placeholder='list name…')
+        if d2.button('Save as list', key='emt_save_list',
+                     disabled=not em_ln.strip()):
+            dfil.save_list(em_ln.strip(), tbl.index)
+            st.success(f'saved {len(tbl)} tickers to '
+                       f'my_lists/{em_ln.strip()}.csv')
+
+gc_view = None
 if ACTIVE_TAB == 'growth':
+    gc_view = st.radio('View', ['Growth Cycle', 'Reversal Odds'], horizontal=True,
+                       key='gc_view', label_visibility='collapsed')
+
+if ACTIVE_TAB == 'growth' and gc_view == 'Growth Cycle':
     import altair as alt
     _how_built('ℹ️ How the Growth Cycle is built', [
         f'<b>Ratio</b> = growth / value = {config.GC_GROWTH} / '
         f'{config.GC_VALUE} daily bars (downloadData_v1). Rebuilt from '
         'PrimeTrading’s Lab Report “Growth Cycle” — only its public '
-        'description and screenshots; calibrated on his readings Sep 18 – '
-        'Oct 9 2026 (<code>test_growth_cycle.py</code>)',
+        'description and board screenshots; calibrated on his boards Sep 28 – '
+        'Nov 2 2026 (<code>test_growth_cycle.py</code>). Zone definitions are '
+        'his wording; the figures under them are ours',
         f'<b>10w structure</b> = EMA{config.GC_STRUCT_WEEKS} of the ratio’s '
-        'weekly highs and weekly lows; the current week counts, so the band '
-        'moves daily. <b>Risk gate</b>: close above the band = risk-on, below '
-        '= risk-off, inside = keeps the last side',
-        f'<b>Momentum</b> (x) = {config.GC_MOM_DAYS}-day change of the gap '
-        f'to the band’s upper line, {config.GC_MOM_SMOOTH}-day mean, over its '
-        f'own {config.GC_SIGMA_DAYS}-day σ; rising while > '
-        f'+{config.GC_MOM_RISING}σ. <b>Gate σ</b> (y) = distance outside '
-        f'the band in σ of that gap; extended above +{config.GC_EXTENDED}σ',
+        'weekly highs and weekly lows, midline = the same of its weekly '
+        'closes; the current week counts, so all three move daily. <b>Risk '
+        'gate</b>: close above the band = risk-on, below = risk-off, inside = '
+        'keeps the last side',
+        f'<b>Momentum</b> (x) = {config.GC_MOM_DAYS}-day change of the gap to '
+        f'the midline, {config.GC_MOM_SMOOTH}-day mean, over its own '
+        f'{config.GC_SIGMA_DAYS}-day σ. Past ±{config.GC_MOM_BAND}σ it turns '
+        'rising / fading; inside that grey strip it keeps the last side. '
+        '<b>Gate σ</b> (y) = distance outside the band, in σ of the midline '
+        f'gap; extended above +{config.GC_EXTENDED}σ',
         '<b>Zones</b>: risk-off + fading = Risk-off · risk-off + rising = '
-        'Probe · risk-on + rising = Ramp Up (Trim when extended) · risk-on + '
-        'fading = Reload (Hold when extended). Day N = sessions in the zone',
-        f'<b>Zone stats</b>: next {config.GC_STATS_FWD} sessions after each '
-        f'day in the zone since {config.GC_HISTORY_START} — '
-        f'{config.GC_STATS_TICKER} up %, its average move, and how often '
-        'growth beat value. Zones describe the environment, not buy / sell '
-        'signals',
+        'Probe · risk-on + rising = Ramp Up · risk-on + fading = Reload. '
+        f'Extended overrides those: <b>Trim</b> when the {config.GC_STRETCH_EMA}'
+        f'-day EMA stretch is also past +{config.GC_TRIM_STRETCH:g}σ, otherwise '
+        '<b>Hold</b>; momentum plays no part there. Day N = sessions in the '
+        'zone. The cycle usually turns counter-clockwise',
+        f'<b>Zone stats</b>: last {config.GC_HISTORY_SESSIONS} sessions. '
+        f'{config.GC_STATS_TICKER} (he uses QQQE) over the next '
+        f'{config.GC_STATS_FWD} sessions; growth won = growth still ahead of '
+        f'value {config.GC_WON_FWD} sessions later. A year needs '
+        f'{config.GC_YEAR_MIN_DAYS}+ days in the zone. Zones describe the '
+        'environment, not buy / sell signals',
     ])
     _iwf = config.DAILY_CURRENT / f'{config.GC_GROWTH}.csv'
     gc_m, gc_stats, gc_ep = _gc_model(_iwf.stat().st_mtime if _iwf.exists() else 0)
@@ -1565,110 +2085,207 @@ if ACTIVE_TAB == 'growth':
     _z = _t['zone']
     _gate = (f'Risk-on · since {_t.gate_since:%b %d}' if _t.risk_on
              else f'Risk-off · since {_t.gate_since:%b %d}')
-    _mom = 'rising' if _t.momentum_sigma > config.GC_MOM_RISING else 'fading'
+    _mom = 'rising' if _t.rising else 'fading'
+    _mom_long = f'Flat, held {_mom}' if _t.mom_flat else _mom.capitalize()
     st.markdown(
         f'<div style="background:{GC_COLORS[_z]};color:white;padding:0.8rem '
         f'1.2rem;border-radius:0.5rem;margin-bottom:0.8rem">'
         f'<span style="font-size:1.8rem;font-weight:700">{_z}</span>'
         f'&nbsp;&nbsp;<span style="font-size:1.05rem">{_gate} — momentum '
-        f'{_mom} · day {_t.day_in_zone} in zone · {_t.name:%a %Y-%m-%d} '
+        f'{_mom_long.lower()} · day {_t.day_in_zone} in zone · {_t.name:%a %Y-%m-%d} '
         f'close</span><br><span style="font-size:0.95rem">{GC_ACTION[_z]}'
         f'</span></div>', unsafe_allow_html=True)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric('Ratio vs 10w band', f'{_t.ratio:.4f}',
-              f'band {_t.lower:.4f} – {_t.upper:.4f}', delta_color='off')
-    k2.metric('Momentum', f'{_t.momentum_sigma:+.2f}σ',
-              f'{_t.momentum_sigma - gc_m.momentum_sigma.iloc[-2]:+.2f}σ vs prior')
-    k3.metric('Gate σ (outside band)', f'{_t.gate_sigma:+.2f}σ',
-              f'gap to upper line {_t.gap_pct:+.2f}%', delta_color='off')
-    k4.metric('Stretch vs 21d EMA', f'{_t.stretch_sigma:+.2f}σ',
-              f'{_t.stretch_pct:+.2f}%', delta_color='off')
 
     _zscale = alt.Scale(domain=list(GC_COLORS), range=list(GC_COLORS.values()))
-    c_map, c_ratio = st.columns([1, 1])
+    c_map, c_side = st.columns([1.15, 1])
     with c_map:
-        gc_path_n = st.slider('Path: last N sessions', 5, 60, 20, key='gc_path_n')
+        st.markdown('**Risk gate × momentum**')
+        gc_path_n = st.slider('Trail: last N sessions', 5, 60, 30, key='gc_path_n')
         _p = gc_m.tail(gc_path_n).rename_axis('Date').reset_index()
-        _xr = max(3.0, float(_p.momentum_sigma.abs().max()) + 0.5)
+        _xr = max(3.5, float(_p.momentum_sigma.abs().max()) + 0.5)
         _yr = max(2.5, float(_p.gate_sigma.abs().max()) + 0.5)
-        _mx, _ex = config.GC_MOM_RISING, config.GC_EXTENDED
+        _bd, _ex = config.GC_MOM_BAND, config.GC_EXTENDED
+        _x = alt.X('x:Q', scale=alt.Scale(domain=[-_xr, _xr], nice=False),
+                   title='← fading · Momentum (σ) · rising →')
+        _y = alt.Y('y:Q', scale=alt.Scale(domain=[-_yr, _yr], nice=False),
+                   title='← value leads · Risk gate (σ outside the 10w band) · '
+                         'growth leads →')
         _regions = pd.DataFrame([
-            ('Risk-off', -_xr, _mx, -_yr, 0), ('Probe', _mx, _xr, -_yr, 0),
-            ('Reload', -_xr, _mx, 0, _ex), ('Ramp Up', _mx, _xr, 0, _ex),
-            ('Hold', -_xr, _mx, _ex, _yr), ('Trim', _mx, _xr, _ex, _yr)],
+            ('Risk-off', -_xr, 0, -_yr, 0), ('Probe', 0, _xr, -_yr, 0),
+            ('Reload', -_xr, 0, 0, _ex), ('Ramp Up', 0, _xr, 0, _ex)],
             columns=['zone', 'x', 'x2', 'y', 'y2'])
-        _bg = alt.Chart(_regions).mark_rect().encode(
-            x=alt.X('x:Q', scale=alt.Scale(domain=[-_xr, _xr]),
-                    title='Momentum (σ) — + = rising'),
-            x2='x2', y=alt.Y('y:Q', scale=alt.Scale(domain=[-_yr, _yr]),
-                             title='Risk gate — σ outside the 10w band'),
-            y2='y2', color=alt.Color('zone:N', scale=_zscale, legend=None))
-        _lbl = alt.Chart(_regions.assign(xm=lambda d: (d.x + d.x2) / 2,
-                                         ym=lambda d: (d.y + d.y2) / 2)
-                         ).mark_text(fontWeight='bold').encode(
-            x='xm:Q', y='ym:Q', text='zone:N')
-        _line = alt.Chart(_p).mark_line(color='white', strokeWidth=2.5).encode(
-            x='momentum_sigma:Q', y='gate_sigma:Q', order='Date:T')
-        _pts = alt.Chart(_p).mark_circle(size=60, opacity=1, stroke='black',
-                                          strokeWidth=1).encode(
-            x='momentum_sigma:Q', y='gate_sigma:Q',
+        _bg = alt.Chart(_regions).mark_rect(opacity=0.22).encode(
+            x=_x, x2='x2', y=_y, y2='y2',
+            color=alt.Color('zone:N', scale=_zscale, legend=None))
+        # above +1.3σ the split is the stretch, not momentum: one band, 2 labels
+        _ext = alt.Chart(pd.DataFrame([{'x': -_xr, 'x2': _xr, 'y': _ex, 'y2': _yr}])
+                         ).mark_rect(color='#8fa6bf', opacity=0.22).encode(
+            x=_x, x2='x2', y=_y, y2='y2')
+        _strip = alt.Chart(pd.DataFrame([{'x': -_bd, 'x2': _bd, 'y': -_yr, 'y2': _yr}])
+                           ).mark_rect(color='#808080', opacity=0.25).encode(
+            x=_x, x2='x2', y=_y, y2='y2')
+        _gate0 = alt.Chart(pd.DataFrame([{'y': 0.0}])).mark_rule(
+            strokeDash=[5, 4], strokeWidth=1.5, color='#808080').encode(y=_y)
+        # faint arrows: the usual counter-clockwise rotation
+        _rot = []
+        for _i, (_t0, _t1) in enumerate(((195, 255), (285, 345), (15, 75), (105, 165))):
+            for _d in np.linspace(_t0, _t1, 12):
+                _rot.append((_i, _d, .68 * _xr * np.cos(np.radians(_d)),
+                             .68 * _yr * np.sin(np.radians(_d))))
+        _rot = pd.DataFrame(_rot, columns=['arc', 'deg', 'x', 'y'])
+        _arc = alt.Chart(_rot).mark_line(color='#808080', opacity=0.45).encode(
+            x=_x, y=_y, detail='arc:N', order='deg:Q')
+        _hd = _rot.groupby('arc').tail(1).copy()
+        # direction of travel on screen, clockwise from up (plot about 1.5:1)
+        _hd['a'] = np.degrees(np.arctan2(-np.sin(np.radians(_hd.deg)) * 1.5,
+                                         np.cos(np.radians(_hd.deg))))
+        _heads = alt.Chart(_hd).mark_point(shape='triangle-up', filled=True, size=90,
+                                           color='#808080', opacity=0.6).encode(
+            x=_x, y=_y, angle=alt.Angle('a:Q', scale=None))
+        _names = pd.DataFrame([
+            ('Risk-off', -_xr, -_yr + .42, 'left'), ('Probe', _xr, -_yr + .42, 'right'),
+            ('Reload', -_xr, _ex - .22, 'left'), ('Ramp Up', _xr, _ex - .22, 'right'),
+            ('Hold', -_xr, _yr - .22, 'left'), ('Trim', _xr, _yr - .22, 'right')],
+            columns=['zone', 'x', 'y', 'side'])
+        _names['rule'] = _names.zone.map(GC_ZONE_RULE)
+        _lbl = []
+        for _side in ('left', 'right'):
+            _n = _names[_names.side == _side]
+            _off = 6 if _side == 'left' else -6
+            _lbl += [
+                alt.Chart(_n).mark_text(align=_side, dx=_off, fontWeight='bold',
+                                        fontSize=13).encode(
+                    x=_x, y=_y, text='zone:N',
+                    color=alt.Color('zone:N', scale=_zscale, legend=None)),
+                alt.Chart(_n).mark_text(align=_side, dx=_off, dy=14, fontSize=9,
+                                        opacity=0.75).encode(
+                    x=_x, y=_y, text='rule:N')]
+        # trail: one segment per session, coloured by the zone it arrives in
+        _seg = _p.assign(x=_p.momentum_sigma.shift(), y=_p.gate_sigma.shift(),
+                         x2=_p.momentum_sigma, y2=_p.gate_sigma,
+                         age=np.linspace(0.3, 1, len(_p))).dropna(subset=['x'])
+        _line = alt.Chart(_seg).mark_rule(strokeWidth=2.5).encode(
+            x=_x, y=_y, x2='x2', y2='y2',
             color=alt.Color('zone:N', scale=_zscale, legend=None),
+            opacity=alt.Opacity('age:Q', scale=None))
+        _pp = _p.assign(x=_p.momentum_sigma, y=_p.gate_sigma)
+        _pts = alt.Chart(_pp).mark_circle(size=28, opacity=0.9).encode(
+            x=_x, y=_y, color=alt.Color('zone:N', scale=_zscale, legend=None),
             tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone',
                      alt.Tooltip('momentum_sigma:Q', format='+.2f', title='momentum σ'),
                      alt.Tooltip('gate_sigma:Q', format='+.2f', title='gate σ'),
+                     alt.Tooltip('stretch_sigma:Q', format='+.2f', title='21d stretch σ'),
                      'day_in_zone'])
-        _now = alt.Chart(_p.tail(1)).mark_point(size=260, color='black',
-                                                strokeWidth=2).encode(
-            x='momentum_sigma:Q', y='gate_sigma:Q')
-        st.altair_chart((_bg + _lbl + _line + _pts + _now).properties(height=420),
+        _first = _pp[_pp.Date.dt.month.ne(_pp.Date.dt.month.shift())].iloc[1:].copy()
+        _first['lab'] = _first.Date.dt.strftime('%b %-d')
+        _month = alt.Chart(_first).mark_text(dy=-9, fontSize=9, opacity=0.8).encode(
+            x=_x, y=_y, text='lab:N')
+        # today + ring: the 21-day stretch, full at +2σ
+        _now = _pp.tail(1).copy()
+        _now['lab'] = f'{_t.name:%b %-d} close · 21d EMA {_t.stretch_sigma:+.2f}σ'
+        _full = min(abs(_t.stretch_sigma) / config.GC_TRIM_STRETCH, 1.0)
+        _ring0 = alt.Chart(_now).mark_arc(radius=13, radius2=10, opacity=0.25,
+                                          color='#808080').encode(x=_x, y=_y)
+        _ring = alt.Chart(_now).mark_arc(radius=13, radius2=10, theta=0,
+                                         theta2=2 * np.pi * _full,
+                                         color=GC_COLORS[_z]).encode(x=_x, y=_y)
+        _dot = alt.Chart(_now).mark_point(size=90, filled=True, opacity=1,
+                                          stroke='black', strokeWidth=1,
+                                          color=GC_COLORS[_z]).encode(x=_x, y=_y)
+        _call = alt.Chart(_now).mark_text(dy=-22, fontSize=10, fontWeight='bold'
+                                          ).encode(x=_x, y=_y, text='lab:N')
+        st.altair_chart(alt.layer(_bg, _ext, _strip, _gate0, _arc, _heads, *_lbl,
+                                  _line, _pts, _month, _ring0, _ring, _dot, _call
+                                  ).properties(height=480),
                         use_container_width=True)
-        st.caption('Gate σ is 0 while the ratio is inside the band — the risk '
-                   'gate then keeps its last side, so a point on the line can be '
-                   'either Reload or Risk-off.')
-    with c_ratio:
-        gc_span = st.radio('Range', ['3M', '6M', '1Y', '2Y', 'All'], index=2,
-                           horizontal=True, key='gc_span')
-        _days = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504}.get(gc_span, len(gc_m))
-        _r = gc_m.tail(_days).rename_axis('Date').reset_index()
-        _band = alt.Chart(_r).mark_area(color='#3d5a78').encode(
-            x=alt.X('Date:T', title=None),
-            y=alt.Y('lower:Q', scale=alt.Scale(zero=False),
-                    title=f'{config.GC_GROWTH} / {config.GC_VALUE}'),
-            y2='upper:Q')
-        _rp = alt.Chart(_r).mark_circle(size=30, opacity=1).encode(
-            x='Date:T', y='ratio:Q',
-            color=alt.Color('zone:N', scale=_zscale,
-                            legend=alt.Legend(orient='bottom', title=None)),
-            tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone',
-                     alt.Tooltip('ratio:Q', format='.4f'),
-                     alt.Tooltip('lower:Q', format='.4f'),
-                     alt.Tooltip('upper:Q', format='.4f')])
-        st.altair_chart((_band + _rp).properties(height=440),
-                        use_container_width=True)
+        st.caption(f'Trail coloured by zone · grey arrows = usual rotation · ring '
+                   f'= 21-day EMA stretch, full at ±{config.GC_TRIM_STRETCH:g}σ · '
+                   f'grey strip = momentum inside ±{_bd}σ, where the zone keeps '
+                   'its last side. On the dashed line = inside the band, keeps '
+                   'its last side.')
+    with c_side:
+        _red, _green = GC_COLORS['Risk-off'], GC_COLORS['Ramp Up']
+        st.markdown(
+            _gc_reading_card(
+                'Risk gate · growth vs its 10w structure', _gate,
+                f'Ratio {_t.ratio:.4f} vs band {_t.lower:.4f}–{_t.upper:.4f} · '
+                f'{_t.gate_sigma:+.2f}σ outside (extended above '
+                f'+{config.GC_EXTENDED}σ).', _green if _t.risk_on else _red)
+            + _gc_reading_card(
+                f'Momentum · {config.GC_MOM_DAYS}-day change in the 10w gap',
+                f'{_mom_long} · {_t.momentum_sigma:+.2f}σ',
+                f'Gap to the 10w midline: {_t.gap_pct:+.1f}% at this close, '
+                f'{_t.gap_prev_pct:+.1f}% {config.GC_MOM_DAYS} sessions earlier.',
+                '#808080' if _t.mom_flat else (_green if _t.rising else _red))
+            + _gc_reading_card(
+                f'Stretch · growth vs its {config.GC_STRETCH_EMA}-day EMA',
+                f'{_t.stretch_pct:+.2f}% · {_t.stretch_sigma:+.2f}σ',
+                f'Past +{config.GC_TRIM_STRETCH:g}σ here with the 10w structure '
+                f'also extended = Trim.', _green if _t.stretch_pct >= 0 else _red),
+            unsafe_allow_html=True)
+        for _row in (GC_CARD_ORDER[:3], GC_CARD_ORDER[3:]):
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(3,1fr);'
+                'gap:0.5rem;margin-bottom:0.5rem">'
+                + ''.join(_gc_zone_card(z, gc_stats.loc[z], z == _z) for z in _row)
+                + '</div>', unsafe_allow_html=True)
 
-    st.markdown(f'**Zone every day since {config.GC_HISTORY_START[:4]}**')
-    _s = gc_m.loc[config.GC_HISTORY_START:].rename_axis('Date').reset_index()
+    _win = gc_m.tail(config.GC_HISTORY_SESSIONS)
+    _h1, _h2 = st.columns([3, 2])
+    gc_span = _h2.radio('Range', ['3M', '6M', '1Y', '2Y', 'All'], index=4,
+                        horizontal=True, key='gc_span')
+    _days = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504}.get(gc_span, len(_win))
+    _s = _win.tail(_days).rename_axis('Date').reset_index()
+    _h1.markdown(f'**Zone every day · {_s.Date.iloc[0]:%b %-d, %Y} → '
+                 f'{_s.Date.iloc[-1]:%b %-d, %Y}**')
     _s['next'] = _s.Date.shift(-1).fillna(_s.Date.iloc[-1] + pd.Timedelta(days=1))
-    st.altair_chart(alt.Chart(_s).mark_rect().encode(
-        x=alt.X('Date:T', title=None), x2='next:T',
-        color=alt.Color('zone:N', scale=_zscale,
-                        legend=alt.Legend(orient='bottom', title=None)),
-        tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone', 'day_in_zone']
-    ).properties(height=70), use_container_width=True)
+    _lo = float(_s.lower.combine(_s.ratio, min).min())
+    _hi = float(_s.upper.combine(_s.ratio, max).max())
+    _pad = (_hi - _lo) * 0.09
+    _s['s0'], _s['s1'] = _lo - _pad, _lo - _pad * 0.4
+    _xd = alt.X('Date:T', title=None)
+    _rs = alt.Scale(domain=[_lo - _pad, _hi + _pad * 0.3], nice=False)
+    _rt = f'{config.GC_GROWTH} / {config.GC_VALUE}'
+    _zone_tip = [alt.Tooltip('Date:T', format='%Y-%m-%d'), 'zone', 'day_in_zone',
+                 alt.Tooltip('ratio:Q', format='.4f'),
+                 alt.Tooltip('lower:Q', format='.4f'),
+                 alt.Tooltip('upper:Q', format='.4f')]
+    _shade = alt.Chart(_s).mark_rect(opacity=0.18).encode(
+        x=_xd, x2='next:T', color=alt.Color('zone:N', scale=_zscale, legend=alt.Legend(
+            orient='top-right', direction='horizontal', title=None)),
+        tooltip=_zone_tip)
+    _band = alt.Chart(_s).mark_area(color='#808a9c', opacity=0.4).encode(
+        x=_xd, y=alt.Y('lower:Q', scale=_rs, title=_rt), y2='upper:Q')
+    _rline = alt.Chart(_s).mark_line(color='#3f6fa8', strokeWidth=1.5).encode(
+        x=_xd, y=alt.Y('ratio:Q', scale=_rs, title=_rt))
+    _strip2 = alt.Chart(_s).mark_rect().encode(
+        x=_xd, x2='next:T', y=alt.Y('s0:Q', scale=_rs, title=_rt),
+        y2='s1:Q', color=alt.Color('zone:N', scale=_zscale), tooltip=_zone_tip)
+    st.altair_chart(alt.layer(_shade, _band, _rline, _strip2).properties(height=330),
+                    use_container_width=True)
+    st.caption('Line = growth vs value · the band around it = the 10w structure · '
+               'a close above is risk-on, below is risk-off.')
 
-    s1, s2 = st.columns([1, 1])
+    s1, s2 = st.columns([3, 2])
     with s1:
-        st.markdown(f'**Zone stats** — next {config.GC_STATS_FWD} sessions, '
-                    f'since {config.GC_HISTORY_START[:4]}')
-        st.dataframe(gc_stats.reset_index(), hide_index=True,
-                     use_container_width=True, column_config={
-                         'zone': 'Zone', 'days': 'Days', 'episodes': 'Episodes',
-                         'up_pct': st.column_config.NumberColumn(
-                             f'{config.GC_STATS_TICKER} up %', format='%.0f%%'),
-                         'avg_move_pct': st.column_config.NumberColumn(
-                             f'{config.GC_STATS_TICKER} avg move', format='%+.1f%%'),
-                         'growth_won_pct': st.column_config.NumberColumn(
-                             'Growth beat value', format='%.0f%%')})
+        st.markdown('**What happened next, by zone**')
+        _yrs = [c for c in gc_stats.columns if c.startswith('won_')]
+        _tbl = gc_stats.loc[['Trim', 'Hold', 'Ramp Up', 'Reload', 'Probe', 'Risk-off'],
+                            ['days', 'growth_won_pct', *_yrs, 'avg_move_short_pct',
+                             'avg_move_pct', 'up_pct']].reset_index()
+        _pc0 = lambda lbl: st.column_config.NumberColumn(lbl, format='%.0f%%')
+        _pc1 = lambda lbl: st.column_config.NumberColumn(lbl, format='%+.1f%%')
+        st.dataframe(_tbl, hide_index=True, use_container_width=True, column_config={
+            'zone': 'Zone', 'days': 'Days',
+            'growth_won_pct': _pc0(f'Growth won {config.GC_WON_FWD}d'),
+            **{c: _pc0(c[4:]) for c in _yrs},
+            'avg_move_short_pct': _pc1(f'{config.GC_STATS_TICKER} {config.GC_WON_FWD}d'),
+            'avg_move_pct': _pc1(f'{config.GC_STATS_TICKER} {config.GC_STATS_FWD}d'),
+            'up_pct': _pc0(f'{config.GC_STATS_FWD}d % up')})
+        st.caption(f'Growth won = growth still ahead of value {config.GC_WON_FWD} '
+                   f'sessions later. {config.GC_STATS_TICKER} = equal-weight Nasdaq '
+                   f'100. A blank means a year has under {config.GC_YEAR_MIN_DAYS} '
+                   'days in the zone.')
     with s2:
         st.markdown('**Recent zone changes**')
         _e = gc_ep.tail(12).iloc[::-1].copy()
@@ -1678,6 +2295,133 @@ if ACTIVE_TAB == 'growth':
             'zone': 'Zone', 'start': 'From', 'end': 'To', 'sessions': 'Sessions',
             'ratio_chg_pct': st.column_config.NumberColumn('Ratio chg',
                                                            format='%+.2f%%')})
+
+if ACTIVE_TAB == 'growth' and gc_view == 'Reversal Odds':
+    import altair as alt
+    _how_built('ℹ️ How Reversal Odds is built', [
+        f'{config.REV_TICKER} daily bars: downloadData_v1 from 2020, before that '
+        '<code>data_history/QQQ_pre2020.csv</code> (one-off, '
+        '<code>fetch_qqq_history.py</code>). Rebuilt from PrimeTrading’s Lab '
+        'Report board of Nov 2 2026, public screenshots only; he is still '
+        'changing it (<code>docs/reversal_odds_plan.md</code>)',
+        f'<b>Stretch</b> = (close − EMA{config.REV_EMA}) / ATR{config.REV_ATR_DAYS} '
+        f'(Wilder), in σ and percentile against its own last '
+        f'{config.REV_WINDOW_DAYS // 252} years. The ATR setting is our fit, he '
+        'doesn’t state it',
+        f'<b>States</b>: at or under −{config.REV_CUT}σ = <b>Reversal</b> with the '
+        f'{config.REV_SMA_FAST}-day above the {config.REV_SMA_SLOW}-day, '
+        f'<b>Probe</b> with it below. At or over +{config.REV_CUT}σ with the '
+        f'{config.REV_SMA_FAST} above = <b>Extended</b>. Otherwise <b>Trend</b> or '
+        '<b>Risk-off</b>. The Trend, Risk-off and Extended rules are inferred '
+        'from his labels',
+        '<b>Trigger</b> = the close at the cut using tonight’s EMA and ATR, as he '
+        'publishes it. Both move with tomorrow’s bar, so it is tomorrow’s level, '
+        'not a standing one, and the EMA’s own move means the real flag can '
+        'need a slightly lower close',
+        f'<b>Weekly gauge</b>: the same stretch on weekly bars against the '
+        f'{config.REV_WEEKLY_EMA}-week EMA. Context only, never a condition',
+        f'<b>What each state has meant</b>, since {config.REV_STATS_START}: flags are '
+        'measured on the first day each one fires, regimes on every session '
+        'inside them. These states are not entry and exit signals. Flags are '
+        'rare, a quiet board is normal',
+    ])
+    _qqq = config.DAILY_CURRENT / f'{config.REV_TICKER}.csv'
+    rv_m, rv_flags, rv_base, rv_reg, rv_full = _rev_model(
+        _qqq.stat().st_mtime if _qqq.exists() else 0)
+    if not rv_full:
+        st.warning('Pre-2020 QQQ history not found: readings use a shorter window '
+                   'than 10 years. Run `python3 fetch_qqq_history.py`.')
+    _t = rv_m.iloc[-1]
+    _st = _t.state
+    _flagged = _st in ('Reversal', 'Probe')
+    _side = 'above' if _t.above else 'below'
+    _sub = (f'flagged {_t.state_day} session{"s" if _t.state_day != 1 else ""}'
+            if _st in ('Reversal', 'Probe', 'Extended') else f'day {_t.state_day}')
+    st.markdown(
+        f'<div style="background:{REV_COLORS[_st]};color:white;padding:0.8rem 1.2rem;'
+        f'border-radius:0.5rem;margin-bottom:0.8rem"><span style="font-size:1.8rem;'
+        f'font-weight:700">{_st}</span>&nbsp;&nbsp;<span style="font-size:1.05rem">'
+        f'{_sub} · 50 {_side} the 200 for {_t.regime_day} days · {_t.name:%a %Y-%m-%d} '
+        f'close</span><br><span style="font-size:0.95rem">{REV_TEXT[_st]}</span></div>',
+        unsafe_allow_html=True)
+
+    c_ch, c_rd = st.columns([1.5, 1])
+    with c_ch:
+        st.markdown(f'**{config.REV_TICKER} · three years**')
+        _r = rv_m.tail(config.REV_CHART_SESSIONS).rename_axis('Date').reset_index()
+        _r['next'] = _r.Date.shift(-1).fillna(_r.Date.iloc[-1] + pd.Timedelta(days=1))
+        _rc = alt.Scale(domain=list(REV_COLORS), range=list(REV_COLORS.values()))
+        _dx = alt.X('Date:T', title=None, axis=alt.Axis(format='%b %y'))
+        _ax = alt.Axis(minExtent=48, maxExtent=48)
+        _py = alt.Y('L:Q', title=None, axis=_ax, scale=alt.Scale(zero=False))
+        _shade_rows = _r[_r.state != 'Trend']
+        _sh = alt.Chart(_shade_rows).mark_rect(opacity=0.22).encode(
+            x=_dx, x2='next:T',
+            color=alt.Color('state:N', scale=_rc, legend=alt.Legend(
+                orient='top', title=None, direction='horizontal')))
+        _wick = alt.Chart(_r).mark_rule(opacity=0.7, color='#808080').encode(
+            x=_dx, y=_py, y2='H:Q')
+        _r['upday'] = _r.C >= _r.O
+        _body = alt.Chart(_r).mark_bar(size=1.6).encode(
+            x=_dx, y=alt.Y('O:Q', title=None, axis=_ax, scale=alt.Scale(zero=False)),
+            y2='C:Q', color=alt.condition('datum.upday', alt.value('#3f9e72'),
+                                          alt.value('#c9605a')),
+            tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), 'state',
+                     alt.Tooltip('C:Q', format='.2f', title='close'),
+                     alt.Tooltip('trigger:Q', format='.2f'),
+                     alt.Tooltip('z:Q', format='+.2f', title='stretch σ')])
+        _py2 = lambda c: alt.Y(f'{c}:Q', title=None, axis=_ax, scale=alt.Scale(zero=False))
+        _s200 = alt.Chart(_r).mark_line(color='#555f6b', strokeWidth=1.3).encode(
+            x=_dx, y=_py2('sma_slow'))
+        _s50 = alt.Chart(_r).mark_line(color='#a56cc1', strokeWidth=1.1).encode(
+            x=_dx, y=_py2('sma_fast'))
+        _trg = alt.Chart(_r).mark_line(color=REV_COLORS['Reversal'], strokeWidth=1,
+                                       strokeDash=[4, 3]).encode(x=_dx, y=_py2('trigger'))
+        _fresh = _r[(_r.state.isin(['Reversal', 'Probe']))
+                    & _r.state.ne(_r.state.shift())]
+        _mk = alt.Chart(_fresh).mark_point(shape='triangle-up', filled=True, size=45,
+                                           opacity=1).encode(
+            x=_dx, y=_py, color=alt.Color('state:N', scale=_rc, legend=None))
+        st.altair_chart(alt.layer(_sh, _wick, _body, _s200, _s50, _trg, _mk)
+                        .properties(height=340), use_container_width=True)
+        st.caption('Dashed green = trigger price · grey = 200-day · purple = 50-day · '
+                   '▲ = first day of a flag.')
+        st.markdown('**Structure extension**')
+        _zy = alt.Y('z:Q', title=None, axis=_ax, scale=alt.Scale(domain=[-3.5, 3.5]))
+        _zb = alt.Chart(_r.assign(z=_r.z.clip(-3.5, 3.5))).mark_bar(size=1.6).encode(
+            x=_dx, y=_zy,
+            color=alt.condition('datum.z >= 0', alt.value('#e39a4d'), alt.value('#5aa9d6')))
+        _zw = alt.Chart(_r.assign(z=_r.z_w.clip(-3.5, 3.5))).mark_line(
+            color='#6b3fa0', strokeWidth=1.5, interpolate='step-after').encode(x=_dx, y=_zy)
+        _lines = pd.DataFrame({'z': [config.REV_CUT, -config.REV_CUT],
+                               'c': [REV_COLORS['Extended'], REV_COLORS['Reversal']]})
+        _zl = alt.Chart(_lines).mark_rule(strokeWidth=1).encode(
+            y=_zy, color=alt.Color('c:N', scale=None))
+        st.altair_chart(alt.layer(_zb, _zw, _zl).properties(height=190),
+                        use_container_width=True)
+        st.caption(f'Same dates as above. Bars = the daily {config.REV_EMA}-EMA reading, '
+                   f'the one in the model. Purple = the weekly {config.REV_WEEKLY_EMA}'
+                   f'-week reading, context only. Lines = the ±{config.REV_CUT}σ cuts.')
+    with c_rd:
+        _dist = (_t.trigger / _t.C - 1) * 100
+        _which = 'Reversal' if _t.above else 'Probe'
+        if _flagged:
+            _card = _gc_reading_card(
+                'How far through the trigger', f'{_dist:+.2f}%',
+                f'{config.REV_TICKER} closed {_t.C:.2f}, below the {_t.trigger:.2f} '
+                f'trigger. <b>{_st} is flagged.</b> The trigger moves nightly with '
+                'the 21-day and the ATR, so this is tomorrow’s level, not a standing '
+                'one.', REV_COLORS[_st])
+        else:
+            _card = _gc_reading_card(
+                'How far from a flag', f'{_dist:+.2f}%',
+                f'{config.REV_TICKER} closed {_t.C:.2f}. It flags a {_which} at '
+                f'{_t.trigger:.2f}, {_t.C - _t.trigger:.2f} away. The trigger moves '
+                'nightly with the 21-day and the ATR, so this is tomorrow’s level, '
+                'not a standing one.', REV_COLORS[_which])
+        st.markdown(_card + _rev_daily_card(_t) + _rev_regime_card(_t)
+                    + _rev_meaning(rv_flags, rv_base, rv_reg, _t),
+                    unsafe_allow_html=True)
 
 # ------------------------------------------ Sustainability Ratio ----------
 # Stacked daily panels of tickers / ratios (src/sr_panels.py) — replaces the
@@ -1701,9 +2445,24 @@ if ACTIVE_TAB == 'sr':
         'is summed and taken off the close, so only intraday moves remain '
         '(market_charts <code>gap_adjust.py</code> / SR_v1.pine). Start date '
         'empty = first day of the range',
+        '<b>Intraday spread</b> = Bowley\'s "ignores gaps" ratios (@XLYXLP, '
+        '@SPYQQQ): 100 + running sum of (A open→close % − B open→close %), '
+        '= 100 on the start date. Same start date as no-gaps. Matches his '
+        'daily changes to the decimal',
+        f'<b>Intraday N-day</b> = Bowley\'s XLP 30-day signal (@XLP30DLT): '
+        f'100 + sum of the last N open→close % of one ticker. '
+        f'≥ {config.SR_NDAY_LEVELS[1]} (red line) = staples bought all day — '
+        f'S&P top warning · ≤ {config.SR_NDAY_LEVELS[0]} (green line) = '
+        f'capitulation, bottom watch. No start date (rolling window)',
+        '<b>Reading</b>: every pair is stored risk-on first (XLY:XLP, QQQ:SPY, '
+        'IWF:IWD, IWM:QQQ, ^DJT:^DJU …), Bowley\'s orientation — rising = '
+        'risk appetite. <i>Defensive : risk-on</i> swaps the legs of every '
+        'pair panel (ratio → B/A, spread mirrored around 100) and the preset '
+        'names with it; tickers and the XLP 30-day line stay as they are',
         'Moving averages (EMA21, SMA50, SMA150, SMA200) are computed on the '
-        'full history, so they are valid from the first bar shown. The line '
-        'under each title: close vs each MA, 1W = 5 sessions, 1M = 21',
+        'full history, so they are valid from the first bar shown. Tiles '
+        'above the chart: last value vs each MA, 1W = 5 sessions, 1M = 21 '
+        '(in points for the two intraday types)',
         f'Layouts: built-in presets, or your own saved as JSON in '
         f'<code>my_layouts/</code>. Up to {srp.MAX_PANELS} panels',
     ])
@@ -1715,8 +2474,17 @@ if ACTIVE_TAB == 'sr':
         st.session_state.pop('sr_layout', None)
     if st.session_state.get('_sr_flash'):
         st.success(st.session_state.pop('_sr_flash'))
-    c1, c2, c3, c4 = st.columns([2.2, 1.8, 0.8, 2.0])
-    sr_layout = c1.selectbox('Layout', _opts, key='sr_layout')
+    c0, c1, c2, c3, c4 = st.columns([1.5, 2.2, 1.8, 0.7, 1.8])
+    sr_reading = c0.radio(
+        'Reading', srp.READINGS, key='sr_reading',
+        help='Pairs are stored risk-on first (XLY:XLP, QQQ:SPY, IWF:IWD …) '
+             '— Bowley\'s orientation, rising = risk appetite. '
+             '"Defensive : risk-on" flips every pair (rising = money hiding); '
+             'tickers and the XLP 30-day line are never flipped.')
+    sr_layout = c1.selectbox(
+        'Layout', _opts, key='sr_layout',
+        format_func=lambda k: k if k.startswith('💾 ')
+        else srp.preset_label(k, sr_reading))
     sr_span = c2.radio('Range', ['3M', '6M', '1Y', '2Y', '5Y'], index=3,
                        horizontal=True, key='sr_span')
     sr_log = c3.checkbox('Log scale', key='sr_log')
@@ -1737,7 +2505,7 @@ if ACTIVE_TAB == 'sr':
     _bl = st.session_state['sr_build']
     _nc = st.session_state['sr_nonce']
     for _k in [k for k in st.session_state                # rows of old nonces
-               if re.fullmatch(r'sr_(t|a|b|up|dn|rm)\d+_(\d+)', str(k))
+               if re.fullmatch(r'sr_(t|a|b|n|up|dn|rm)\d+_(\d+)', str(k))
                and not str(k).endswith(f'_{_nc}')]:
         del st.session_state[_k]
     _choices = srp.ticker_choices()
@@ -1774,7 +2542,12 @@ if ACTIVE_TAB == 'sr':
                 'Ticker / A', _opts_t, key=f'sr_a{_i}_{_nc}', format_func=_fmt_t,
                 index=_opts_t.index(_row['a']) if _row['a'] in _opts_t else 0,
                 label_visibility='collapsed')
-            if _row['type'] != 'Ticker':
+            if _row['type'] == 'Intraday N-day':
+                _row['n'] = r3.number_input(
+                    'N days', 2, 250, int(_row.get('n') or config.SR_NDAY_N),
+                    key=f'sr_n{_i}_{_nc}', label_visibility='collapsed',
+                    help='Window in trading days (Bowley: 30)')
+            elif _row['type'] in srp.TWO_LEG:
                 _row['b'] = r3.selectbox(
                     'B', _opts_t, key=f'sr_b{_i}_{_nc}', format_func=_fmt_t,
                     index=_opts_t.index(_row['b']) if _row['b'] in _opts_t
@@ -1792,12 +2565,14 @@ if ACTIVE_TAB == 'sr':
                       args=(_i,), help='Remove chart')
         st.button('＋ Add chart', key='sr_add', on_click=_sr_add,
                   disabled=len(_bl) >= srp.MAX_PANELS)
-        st.caption(f'Tickers: the first {config.SR_TICKER_LIST_N} rows of '
+        st.caption('Enter pairs risk-on first (A = risk-on, B = defensive); '
+                   'the Reading switch flips them for display. '
+                   f'Tickers: the first {config.SR_TICKER_LIST_N} rows of '
                    f'<code>{config.SR_TICKER_LIST.name}</code> (indexes, '
                    'sectors, styles, bonds). Changes show right away; they '
                    'are kept only once saved.', unsafe_allow_html=True)
         e1, e2, e3, e4 = st.columns([1.3, 1.6, 0.9, 0.9])
-        sr_gap_start = e1.date_input('No-gaps start (empty = range start)',
+        sr_gap_start = e1.date_input('No-gaps / spread start (empty = range start)',
                                      value=None, key='sr_gap_start')
         _sv_name = e2.text_input('Save layout as…', key='sr_save_name',
                                  placeholder='layout name')
@@ -1818,7 +2593,7 @@ if ACTIVE_TAB == 'sr':
             st.session_state['_sr_flash'] = f'Deleted layout “{sr_layout[2:]}”.'
             st.rerun()
 
-    sr_panels = srp.clean_panels(_bl)
+    sr_panels = srp.oriented(srp.clean_panels(_bl), sr_reading)
     if not sr_panels:
         st.info('No charts — add one in 🛠 Build / edit layout.')
         st.stop()
@@ -1848,34 +2623,59 @@ if ACTIVE_TAB == 'sr':
                        f'{", ".join(t for t in (_pn["a"], _pn["b"]) if t)}.')
             continue
         _df = srp.with_mas(_s)
-        _sub = srp.status(_df)
+        _sub = srp.status(_df, points=_pn['type'] in srp.POINT_TYPES)
         _df = _df.loc[_x0:_x1]
         if _df.empty:
             st.warning(f'{_lbl}: no bars in the selected range.')
             continue
-        _views.append((_lbl, _df, _sub))
+        _up = srp.rising_means(_pn, sr_reading)
+        _views.append((_lbl, _df, _sub + (f' · {_up}' if _up else ''),
+                       srp.levels(_pn)))
     if not _views:
         st.stop()
-    st.markdown(' &nbsp; '.join(
-        f'<span style="color:{_ma_col[m]};font-weight:600">━ {m}</span>'
-        for m in sr_mas), unsafe_allow_html=True)
-    _ph = max(140, _h // len(_views))
+
+    def _fmt_of(v):
+        return '.2f' if abs(v) >= 10 else '.4f'
+    # status tiles: one per panel (value + MA / 1W / 1M line), so the
+    # charts below can sit edge to edge without titles
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">'
+        + ''.join(
+            f'<div style="border:1px solid rgba(128,128,128,.35);border-radius:6px;'
+            f'padding:4px 8px;font-size:12px;line-height:1.35">'
+            f'<b>{_lbl}</b> &nbsp;{_df["value"].iloc[-1]:{_fmt_of(_df["value"].iloc[-1])}}'
+            f'<br><span style="color:gray">{_sub}</span></div>'
+            for _lbl, _df, _sub, _ in _views)
+        + '</div>' + ' &nbsp; '.join(
+            f'<span style="color:{_ma_col[m]};font-weight:600">━ {m}</span>'
+            for m in sr_mas), unsafe_allow_html=True)
+    _ph = max(110, _h // len(_views))
     _zoom = alt.selection_interval(bind='scales', encodings=['x'], name='zoom')
     _hover = alt.selection_point(fields=['Date'], nearest=True, on='pointerover',
                                  clear='pointerout', empty=False, name='hover')
     _charts = []
-    for _k, (_lbl, _df, _sub) in enumerate(_views):
+
+    def _inline(df: pd.DataFrame):
+        """Data inside the spec, not as Streamlit named datasets: those are
+        attached after the chart is built and on some reruns never arrived
+        (panels drew empty — frames only, 'Infinite extent for val')."""
+        out = df.copy()
+        if 'Date' in out:
+            out['Date'] = out['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
+        return alt.Data(values=out.to_dict('records'))
+
+    for _k, (_lbl, _df, _sub, _lv) in enumerate(_views):
         _last = _k == len(_views) - 1
         _v = _df['value'].iloc[-1]
-        _fmt = '.2f' if abs(_v) >= 10 else '.4f'
+        _fmt = _fmt_of(_v)
         _long = (_df[['value'] + sr_mas].rename(columns={'value': _lbl})
                  .rename_axis('Date').reset_index()
                  .melt('Date', var_name='series', value_name='val').dropna())
         _x = alt.X('Date:T', title=None, scale=alt.Scale(domain=[_x0, _x1]),
                    axis=alt.Axis(labels=_last, ticks=_last, format='%b %y'))
-        _y = alt.Y('val:Q', title=None, scale=alt.Scale(
-            type='log' if sr_log else 'linear', zero=False))
-        _base_ch = alt.Chart(_long).encode(x=_x)
+        _y = alt.Y('val:Q', title=None, axis=alt.Axis(orient='right'),
+                   scale=alt.Scale(type='log' if sr_log else 'linear', zero=False))
+        _base_ch = alt.Chart(_inline(_long)).encode(x=_x)
         _lines = _base_ch.mark_line().encode(
             y=_y,
             color=alt.Color('series:N', legend=None, scale=alt.Scale(
@@ -1884,18 +2684,33 @@ if ACTIVE_TAB == 'sr':
             strokeWidth=alt.condition(alt.datum.series == _lbl,
                                       alt.value(1.8), alt.value(1.1)))
         _main = _long[_long.series == _lbl]
-        _pts = alt.Chart(_main).mark_point(opacity=0, size=60).encode(
+        _pts = alt.Chart(_inline(_main)).mark_point(opacity=0, size=60).encode(
             x=_x, y=_y,
             tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'),
                      alt.Tooltip('val:Q', format=_fmt, title=_lbl)])
         _rule = _base_ch.mark_rule(color='gray').encode().transform_filter(_hover)
-        _layer = alt.layer(_lines, _rule, _pts).properties(
-            width=_w, height=_ph, title=alt.TitleParams(
-                f'{_lbl}  {_v:{_fmt}}', subtitle=_sub, anchor='start',
-                fontSize=14, subtitleColor='gray'))
-        _charts.append(_layer.add_params(_zoom, _hover))
-    st.altair_chart(alt.vconcat(*_charts, spacing=6).resolve_scale(
-        x='shared', y='independent'), use_container_width=False)
+        # label inside the panel, top left (StockCharts style) — no title,
+        # so the panels can touch
+        _tag = alt.Chart(_inline(pd.DataFrame({'t': [f'━ {_lbl}  {_v:{_fmt}}']}))).mark_text(
+            align='left', baseline='top', fontSize=13, fontWeight='bold',
+            color=_line).encode(x=alt.value(6), y=alt.value(5), text='t:N')
+        _parts = [_lines, _rule, _pts, _tag]
+        # fixed reference lines (94/100/106), one rule each with constant
+        # style — a dash-list data column reaches the browser as BigInt via
+        # Arrow and breaks the canvas renderer; _lines stays first (params)
+        for _v_l, _c_l, _d_l in _lv:
+            _parts.insert(1, alt.Chart(_inline(pd.DataFrame({'val': [float(_v_l)]})))
+                          .mark_rule(color=_c_l, strokeWidth=1.6,
+                                     strokeDash=[5, 4] if _d_l else [])
+                          .encode(y=_y))
+        _charts.append(alt.layer(*_parts).properties(width=_w, height=_ph)
+                       .add_params(_zoom, _hover))
+    # color independent: a shared one merges the panels' series domains and
+    # paints later panels' main line in an MA color
+    st.altair_chart(alt.vconcat(*_charts, spacing=0).resolve_scale(
+        x='shared', y='independent', color='independent')
+        .configure_view(stroke='#9ca3af', strokeWidth=1),
+        use_container_width=False)
 
 # ------------------------------------------ Where is each leader? --------
 # PrimeTrading Lab Report "Leaders Map" for a user list FILE (no presets):
@@ -2152,12 +2967,19 @@ if ACTIVE_TAB == 'leaders':
         f'{config.SCOOTER_MIN_SCORE:.0f}: 60% long-term (% vs 200 EMA, '
         f'125d ROC), 30% mid (% vs 50 EMA, 20d ROC), 10% short (RSI14, PPO '
         f'slope), ranked 0–99.9 within this universe',
-        '<b>Union</b> — every ticker in at least one of the three lists, '
-        'deduped; <code>sources</code> / <code>n_sources</code> show which',
+        f'<b>CANTATA / CE</b> — breakoutwatch CANTATA Evaluator, CE ≥ '
+        f'{config.CANTATA_MIN_CE:g} of 18: CET technical 0–7 (price vs '
+        f'50/200dMA, RS rank, industry rank, distance from 52w high, Up/Down '
+        f'volume) + CEF fundamental 0–11 (EPS / sales growth & acceleration, '
+        f'forward EPS, institutions, ROE, cash flow, margin)',
+        '<b>Union</b> — every ticker in at least one of Minervini, CANSLIM, '
+        'SCOOTER (CANTATA is not in it), deduped; <code>sources</code> / '
+        '<code>n_sources</code> show which',
     ])
     for name, label in [('minervini', 'Minervini trend template (8/8)'),
                         ('canslim', 'CANSLIM C-A-I'),
                         ('scooter', 'SCOOTER / SCTR ≥ 90'),
+                        ('cantata', f'CANTATA CE ≥ {config.CANTATA_MIN_CE:g}'),
                         ('all', 'Union (deduped, all lists)')]:
         df = leaders.get(name)
         with st.expander(f'{label} — {0 if df is None else len(df)} tickers',
@@ -2503,15 +3325,6 @@ if ACTIVE_TAB == 'confluence':
             st.success(f'saved {len(_tk)} tickers to my_lists/{cf_ln.strip()}.csv')
 
 # ------------------------------------------------------------- detail -----
-@st.cache_data(ttl=600)
-def _fin_table() -> pd.DataFrame:
-    """Fundamentals snapshot (earnings dates / results) for the summary."""
-    try:
-        return data_loader.load_financial_data()
-    except OSError:
-        return pd.DataFrame()
-
-
 if ACTIVE_TAB == 'detail':
     ticker = st.selectbox('Ticker', sorted(full.index))
     if ticker:
@@ -2549,6 +3362,9 @@ if ACTIVE_TAB == 'detail':
                              use_container_width=True, hide_index=True)
             except OSError:
                 st.caption('no HVE baseline in volume_records/baseline/')
+        with st.expander('📈 Around earnings — this report vs the average '
+                         'of earlier ones', expanded=True):
+            _er_section(ticker, 'det_er')
         detail = row.to_frame('value')
         detail['value'] = detail['value'].map(
             lambda v: f'{v:,.3f}' if isinstance(v, float) else str(v))

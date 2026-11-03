@@ -58,8 +58,8 @@ leaders, never to the whole universe.
 
 ## 4. Smaller follow-ups
 
-- [ ] Leaders' Lists tab doesn't show the CANTATA list (leaders_cantata.csv
-      is written every run) — add it + a line in the info box.
+- [x] Leaders' Lists tab: CANTATA list + info-box line — DONE 2026-10-21
+      (own expander; the Union stays Minervini / CANSLIM / SCOOTER).
 - [ ] "How … is built" info box for the remaining tabs (Timing, Patterns,
       Workflows; Confluence done 2026-10-13) — helpers `_how_built` /
       `_universe_line` in dashboard.py.
@@ -155,8 +155,28 @@ leaders, never to the whole universe.
         "🌱 Growth Cycle" (`ACTIVE_TAB == 'growth'`): zone banner, 4
         metrics, X/Y zone map + path, ratio + band chart, zone strip
         since 2022, zone stats, recent zone changes, "How it's built".
-      - [ ] Calibrate further with real screenshots (Y-axis σ unit, lower
-        line 0.35–0.6% off, a Probe / Trim / Hold day).
+      - [x] Realigned with his boards DONE 2026-11-03 (his full board images
+        are public in the Prime Reports: Oct 9, Oct 14, Oct 30, Nov 2). Model:
+        momentum gap to the midline (EMA10 of weekly closes), ±0.25σ dead-band
+        keeps the last side, gate σ = distance / 63d std of the midline gap,
+        Trim vs Hold = 21d stretch past +2σ (not momentum), growth won over 10
+        sessions, rolling 1144-session stats window. UI: his zone definitions
+        with our stats, reading cards, map with grey strip / rotation arrows /
+        stretch ring, zone-every-day chart, table by year.
+        Corrected earlier notes: **Oct 9 was Ramp Up day 16, Reload began
+        Oct 12** (his board; the 10/11 post text was early), and risk-off began
+        Oct 16, not Oct 15.
+      - [ ] Still open: lower line reads 0.1–0.25% above his (covered by
+        `GC_GATE_TOL_LOW_PCT`, cause unknown). Days vs his at Oct 30: Trim 70 /
+        81, Hold 113 / 104, Probe 190 / 195, Ramp Up 224 / 222, Reload 248 /
+        243, Risk-off 299 / 299. Nov 2 test runs after the next download.
+      - [x] Reversal Odds v1 DONE 2026-11-03: second view on the Growth Cycle
+        tab (`src/reversal_odds.py`, `config.REV_*`, `test_reversal_odds.py`).
+        Pre-2020 QQQ in `data_history/QQQ_pre2020.csv`
+        (`fetch_qqq_history.py`), current from downloadData_v1.
+      - [ ] Reversal Odds open: Reversal forward stats don't match (ours +2.20%
+        20d vs his +0.77%, same N 43); Extended 22 vs 18. See
+        `docs/reversal_odds_plan.md`.
 - [x] test_dashboard_app.py crash in Patterns ("'AAPL' is not in list")
       — FIXED 2026-10-15: stale `pt_chart_ticker` pick is dropped when it
       isn't in the new result list; outdated "reset" check updated. 45/45.
@@ -251,3 +271,42 @@ gaps), MAs EMA21/SMA50/SMA150/SMA200, range, log. `test_sr_panels.py`
       indexes_tickers.csv (config.SR_TICKER_LIST_N; row 50 = QQEW), ↑ ↓ ✕,
       ＋ Add chart, Save (reruns + selects it), Delete own layouts.
 - [ ] Maybe: candlesticks (OHLC is there; ratio H/L = Ha/Hb approximation).
+- [x] 2026-10-15: Bowley (EarningsBeats) charts. Gapless StockCharts-style
+      figure (spacing 0, label + value inside each panel, price scale right,
+      framed panels, status tiles above). New panel types: **Intraday
+      spread** = 100 + running Σ(A − B open→close %) from the start date
+      (his @XLYXLP / @SPYQQQ — daily changes match his 9 Oct prints to the
+      decimal; the SR_v1 dollar gap-adjust does not, and drifts on long
+      spans, e.g. IWM 153 → 58 since 2016) and **Intraday N-day** = 100 +
+      Σ last N open→close % (@XLP30DLT, 97.7 vs his 97.11) with 94 / 100 /
+      106 lines. Presets "Bowley: XLP 30-day + SPY", "Bowley: sustainability
+      ratios"; the ratio pairs gained the spread panel for comparison.
+      Fixed: shared color scale painted later panels' line in MA colors.
+- [ ] After a few weeks side by side: drop "Ratio no gaps" if the spread
+      says the same.
+- [ ] Maybe later (out of scope for now): event / signal vertical lines
+      across panels, red-black up/down line coloring, CPCE (needs a CBOE feed).
+
+## 11. Earnings Moves screener (Signals tab) — v1 DONE 2026-10-19
+
+`src/focus/earnings_moves.py`, computed in the daily run (~1 s), columns
+`em_*` (latest report reaction within EM_LOOKBACK_BARS = 60) and `sb_*`
+(latest metaVolume shock bar: vol ≥ 4× the 50-bar avg AND |gap| ≥ 5%,
+report or not; `sb_count`). Reaction day = report session or the one
+after, whichever traded more volume (no before-open/after-close flag in
+the snapshot). Per event: gap %, day %, vol × avg, close strength (in the
+gap's direction), gap held, stop held (day's low / high), since %, PVB
+trigger that day, HVE/HV1Y that day. No fundamentals columns (decided).
+Tab "💥 Earnings Moves": presets Power Earnings Gap (gap ≥ 3%, vol ≥ 3×,
+close strength ≥ 50, stop held), Episodic Pivot (gap ≥ 10%, vol ≥ 3×),
+Earnings PVB, Shock bar; Event / Direction / N bars + conditions; the
+Screener filter panel (`emf_`). Tests: `test_earnings_moves.py`, UI suite §8b.
+
+- [ ] Data caveat: the fundamentals snapshot lags (2026-10-13 snapshot has
+      no JPM 2026-10-14 report) → those only show up under "Any gap".
+      Maybe: use Zacks report time (zacks/zacks_earnings) for the exact
+      reaction day and fresher dates.
+- [ ] After a few weeks of use: tune the preset thresholds (PEG gap 3%?).
+- [ ] Maybe: forward-return stats per preset (metaVolume study style) to
+      see which variant actually works.
+- [ ] Maybe: Confluence badge for a recent Power Earnings Gap.

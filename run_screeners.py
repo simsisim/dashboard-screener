@@ -38,7 +38,7 @@ from src import combine, confluence, data_loader, indicators, report
 from src.history_db import HistoryDB
 from src.timing import daily as timing_daily
 from src.focus import atr_extension, ma_structure, rti, stages, \
-    volume_adx, volume_anomaly, volume_records
+    volume_adx, volume_anomaly, volume_records, earnings_moves
 from src.leaders import adl_accumulation, canslim, cantata, \
     downtrend_reversal, ema20_pullback, gmma, gold_launch_pad, minervini, \
     qullamaggie, scooter, stockbee_movers, top_movers
@@ -447,6 +447,12 @@ def main(argv=None):
               f'{hve_info["bars_after_cutoff"]} bars after, '
               f'{hve_info["events"]} new records | '
               f'status {hve_info["status_counts"]}')
+        print('focus i) Earnings Moves (report-day reactions + shock bars)...')
+        em_df = earnings_moves.evaluate(data,
+                                        earnings_moves.report_columns(_fin))
+        print(f'  -> reactions in the last {config.EM_LOOKBACK_BARS} bars: '
+              f'{int(em_df["em_date"].notna().sum())} | shock bars: '
+              f'{int(em_df["sb_date"].notna().sum())} tickers')
         print('leaders i) EMA20 pullback + Downtrend reversal...')
         ema20_df = ema20_pullback.evaluate(close, data['open'],
                                            data['low'], sco_df['scooter_score'])
@@ -460,8 +466,8 @@ def main(argv=None):
         print(f'  -> adl={int(adl_df["in_adl_accumulation"].sum())}')
 
         parts = [ext_df, stg_df, ma21s_df, rti_df, stb_df, glp_df, vadx_df,
-                 gmma_df, qulla_df, van_df, hve_df, hv1y_df, adl_df, ema20_df,
-                 dtrev_df]
+                 gmma_df, qulla_df, van_df, hve_df, hv1y_df, em_df, adl_df,
+                 ema20_df, dtrev_df]
         print('timing) Blue/Black Dot, PVB, ATR1 (incremental caches)...')
         parts.append(timing_daily.evaluate(data))
         full = ctx.join(parts, how='left')

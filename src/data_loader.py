@@ -199,6 +199,21 @@ def check_missing_days(data: dict, lookback: int = 60,
     return holes
 
 
+def load_daily(symbol: str) -> pd.DataFrame | None:
+    """One ticker's full daily OHLCV, archive + current (current wins on
+    overlap); None when no file."""
+    for stem in _file_candidates(symbol):
+        parts = [df for df in (_read_daily_file(base / f'{stem}.csv')
+                               for base in (config.DAILY_ARCHIVE,
+                                            config.DAILY_CURRENT)
+                               if (base / f'{stem}.csv').exists())
+                 if df is not None]
+        if parts:
+            df = pd.concat(parts)
+            return df[~df.index.duplicated(keep='last')].sort_index()
+    return None
+
+
 def load_financial_data() -> pd.DataFrame:
     """Fundamentals snapshot (config.FIN_DATA_CSV), ticker-indexed."""
     df = pd.read_csv(config.FIN_DATA_CSV, low_memory=False)

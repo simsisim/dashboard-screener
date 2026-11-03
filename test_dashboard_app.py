@@ -522,6 +522,19 @@ def main():
               f'stages={len(_rt["stages"]) if _rt else 0}')
     _wf_test.unlink(missing_ok=True)
 
+    # ---- 8b. Earnings Moves tab (Signals; src/focus/earnings_moves.py) ---
+    at_em = _app('earnmoves', 300)
+    at_em.run()
+    check('earnings moves tab: boot 0 exceptions', len(at_em.exception) == 0,
+          at_em.exception[0].message[:120] if at_em.exception else '')
+    at_em.button(key='emt_p_▶ Shock bar').click()
+    at_em.run()
+    _em_cap = next((c.value for c in at_em.caption
+                    if re.match(r'[\d,]+ tickers — ', c.value)), '')
+    check('earnings moves tab: Shock bar preset switches event + direction',
+          len(at_em.exception) == 0 and 'Any gap (shock bar), both' in _em_cap,
+          _em_cap[:80])
+
     # ---- 9. Growth Cycle tab (Market Health; src/growth_cycle.py) ---------
     at10 = _app('growth', 300)
     at10.run()
@@ -529,15 +542,35 @@ def main():
           at10.exception[0].message[:120] if at10.exception else '')
     check('growth cycle tab: nav row 1 = Market Health',
           ss(at10.session_state, 'tab_group') == '🩺 Market Health')
-    check('growth cycle tab: zone banner + 4 metrics',
-          any('day ' in str(m.value) and 'in zone' in str(m.value)
-              for m in at10.markdown) and len(at10.metric) == 4,
-          f'metrics={len(at10.metric)}')
+    _gc_md = ' '.join(str(m.value) for m in at10.markdown)
+    check('growth cycle tab: zone banner + 3 readings + 6 zone definitions',
+          'day ' in _gc_md and 'in zone' in _gc_md
+          and all(t in _gc_md for t in ('Risk gate · growth', 'Momentum · ',
+                                        'Stretch · growth', 'Coin flip in',
+                                        'trail stops', 'growth won')),
+          _gc_md[:120])
+    check('growth cycle tab: what happened next + recent changes tables',
+          len(at10.dataframe) == 2, f'dataframes={len(at10.dataframe)}')
     at10.radio(key='gc_span').set_value('All').run()
     at10.slider(key='gc_path_n').set_value(60).run()
     check('growth cycle tab: range / path controls rerun cleanly',
           len(at10.exception) == 0,
           at10.exception[0].message[:120] if at10.exception else '')
+
+    at10.radio(key='gc_view').set_value('Reversal Odds').run()
+    _rv_md = ' '.join(str(m.value) for m in at10.markdown)
+    check('reversal odds view: state + trigger + regime gauge + state bars',
+          len(at10.exception) == 0 and 'THE REGIME' in _rv_md
+          and 'STRETCHED DOWN' in _rv_md and 'trigger' in _rv_md
+          and 'FORWARD RETURN' in _rv_md and 'RETURN EARNED' in _rv_md
+          and 'data_history' in _rv_md and len(at10.dataframe) == 0,
+          at10.exception[0].message[:120] if at10.exception else _rv_md[:120])
+    check('reversal odds view: history found, no warning', len(at10.warning) == 0,
+          str([w.value for w in at10.warning])[:120])
+    at10.radio(key='gc_view').set_value('Growth Cycle').run()
+    check('reversal odds view: back to Growth Cycle',
+          len(at10.exception) == 0 and len(at10.dataframe) == 2
+          and any('Risk gate · growth' in str(m.value) for m in at10.markdown))
 
     # ---- 10. Sustainability Ratio panels (src/sr_panels.py) --------------
     at11 = _app('sr', 300)
@@ -546,8 +579,17 @@ def main():
           len(at11.exception) == 0 and len(at11.warning) == 0,
           at11.exception[0].message[:120] if at11.exception
           else str([w.value for w in at11.warning]))
-    for _lay in ('Sectors (SPY + 11 SPDRs)', 'XLP : XLY'):
+    for _lay in ('Sectors (SPY + 11 SPDRs)', 'Bowley: sustainability ratios',
+                 'IWF : IWD (growth : value)'):
         at11.selectbox(key='sr_layout').set_value(_lay).run()
+    # Reading switch: same preset stays selected, its panels flip
+    at11.radio(key='sr_reading').set_value('Defensive : risk-on').run()
+    check('sustainability ratio tab: defensive reading keeps the layout, '
+          'flips nothing stored',
+          at11.selectbox(key='sr_layout').value == 'IWF : IWD (growth : value)'
+          and ss(at11.session_state, 'sr_build', [{}])[2].get('a') == 'IWF'
+          and len(at11.exception) == 0,
+          str(at11.selectbox(key='sr_layout').value))
     at11.checkbox(key='sr_log').check().run()
     at11.radio(key='sr_span').set_value('5Y').run()
     # builder: ＋ Add chart appends a row and it is drawn

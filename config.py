@@ -45,6 +45,15 @@ SUMMARY_MIN_FAMILIES = 3             # "at >= N families" in the summary
 SUMMARY_BADGE_LOOKBACK = 10          # badges gained / lost within N sessions
 SUMMARY_RECENT_RECORD_BARS = 20      # an HVE this recent is "recent"
 SUMMARY_RANK_SESSIONS = 5            # index ranks over the last N sessions
+# Around-earnings chart (src/earnings_window.py; Ticker detail + Volume Records)
+ER_WINDOW_BEFORE = 20                # trading days shown before the report
+ER_WINDOW_AFTER = 20                 # ... and after it
+ER_AVG_QUARTERS = 4                  # default: average over the N reports before
+# Earnings Moves tab (src/focus/earnings_moves.py; daily run)
+EM_LOOKBACK_BARS = 60                # latest event within N trading bars
+EM_AVG_VOL_BARS = 50                 # volume multiple vs the avg of the N bars before
+SB_VOL_MULT = 4.0                    # shock bar (metaVolume earnings_gap_study.py):
+SB_GAP_MIN_PCT = 5.0                 #   vol >= 4x avg AND |gap| >= 5%
 
 # --- history requirements (trading days) ---
 # SCTR needs 210 (test_scooter.sctr_model.MIN_DAILY_BARS); Minervini/stage need
@@ -236,28 +245,50 @@ MA21S_LENGTH = 21           # script: dailyLength = 21, dailyType = 'EMA'
 MA21S_PULLBACK_PCT = 2.0    # user: close within +-2% of the band (inside
                             # counts as 0) + trend up = pullback mode
 # --- Growth Cycle (PrimeTrading Lab Report; src/growth_cycle.py, TODO §6).
-# Calibrated on his public readings 2026-09-18 .. 10-09 ---
+# Calibrated on his boards 2026-09-28 .. 11-02 ---
 GC_GROWTH, GC_VALUE = 'IWF', 'IWD'  # ratio = growth / value
 GC_STATS_TICKER = 'QQEW'    # zone stats (he uses QQQE, the Direxion twin)
-GC_STRUCT_WEEKS = 10        # "10w structure": EMA10 of weekly highs / lows
-GC_MOM_DAYS = 10            # momentum = 10-day change in the gap ...
+GC_STRUCT_WEEKS = 10        # "10w structure": EMA10 of weekly highs / lows,
+                            # midline = EMA10 of weekly closes
+GC_MOM_DAYS = 10            # momentum = 10-day change in the midline gap ...
 GC_MOM_SMOOTH = 3           # ... 3-day mean ...
 GC_SIGMA_DAYS = 63          # ... over its own 63-day std (also Y / stretch)
-GC_MOM_RISING = 0.20        # rising while momentum > this. His cut is
-                            # +0.25σ, but ours reads ~8% lower (Oct 8: his
-                            # +0.25 Ramp Up = our 0.23; Oct 9 0.00 = Reload)
+GC_MOM_BAND = 0.25          # past +-this momentum flips rising / fading;
+                            # inside it keeps the last side (his grey strip)
 GC_GATE_TOL_PCT = 0.05      # close within 0.05% under the upper line still
                             # counts as above: data-source noise (Sep 18 is
                             # his risk-on day, ours -0.012%)
-GC_EXTENDED = 1.3           # Y "extended above +1.3σ" -> Trim / Hold
-GC_STRETCH_EMA = 21         # stretch = ratio vs its 21-day EMA (shown only)
-GC_STATS_FWD = 20           # zone stats: next 20 sessions
-GC_HISTORY_START = '2022-01-01'  # zone strip + stats window
+GC_GATE_TOL_LOW_PCT = 0.15  # same for the lower line, which reads 0.1-0.2%
+                            # above his (Oct 15 stays risk-on, Oct 16 flips)
+GC_EXTENDED = 1.3           # Y "extended above +1.3σ" -> Hold, or Trim when ...
+GC_TRIM_STRETCH = 2.0       # ... the 21-day EMA stretch is also past +2σ
+GC_STRETCH_EMA = 21         # stretch = ratio vs its 21-day EMA
+GC_STATS_FWD = 20           # zone stats: stats ticker over the next 20 sessions
+GC_WON_FWD = 10             # "growth won" = still ahead of value 10 sessions on
+GC_YEAR_MIN_DAYS = 5        # a year needs 5+ days in the zone to show a figure
+GC_HISTORY_SESSIONS = 1144  # zone strip + stats window: rolling, as on his board
+# --- Reversal Odds (PrimeTrading Lab Report, Nov 2 2026 version; he is still
+# changing it; src/reversal_odds.py, docs/reversal_odds_plan.md) ---
+REV_TICKER = 'QQQ'
+REV_HISTORY_CSV = SCREENERS_ROOT / 'data_history' / 'QQQ_pre2020.csv'
+REV_EMA = 21                # stretch = (close - EMA21) / ATR ...
+REV_ATR_DAYS = 14           # ... Wilder ATR14 (fitted: he doesn't state it)
+REV_WINDOW_DAYS = 2520      # ... scored on its own last 10 years
+REV_MIN_DAYS = 756          # needs 3 years to read at all
+REV_CUT = 1.75              # flag at +-1.75σ
+REV_SMA_FAST, REV_SMA_SLOW = 50, 200  # regime
+REV_WEEKLY_EMA = 10         # weekly gauge (context only): 10-week EMA ...
+REV_WINDOW_WEEKS = 520      # ... on 10 years of weekly bars
+REV_MIN_WEEKS = 156
+REV_STATS_START = '2018-07-05'  # first session of his 2094 ("since 2018")
+REV_CHART_SESSIONS = 756    # chart: three years
 # --- Sustainability Ratio panels (src/sr_panels.py): the builder's ticker
 # picker = the first N rows of downloadData_v1's index list (indexes,
 # sectors, styles, bonds; row 50 = QQEW; special industries come after) ---
 SR_TICKER_LIST = DOWNLOAD_ROOT / 'user_input' / 'indexes_tickers.csv'
 SR_TICKER_LIST_N = 50
+SR_NDAY_N = 30              # 'Intraday N-day' default window (XLP30)
+SR_NDAY_LEVELS = (94, 106)  # Bowley's capitulation / top-warning lines
 HV1Y_BARS = 252             # HV1Y (highest volume in 1 year) window; metaVolume
                             # uses 365 calendar days (HV1Y_window_days) ~ same
 HVE_MATCH_TOL = 0.01        # baseline record vs today's file volume on that
